@@ -132,7 +132,7 @@ interface LayerManifest {
   parent?: string;         // sub-layer, e.g. cctv_previews → cctv
   countFrom?: string;      // which dataset feeds the panel count; defaults to the only one
 
-  requiredConfig?: ConfigFieldSpec[];
+  requiredConfig?: ConfigFieldSpec[];   // see §4
 
   // Sugar for the common single-dataset case; normalised to `datasets` by the validator.
   source?: SourceSpec;
@@ -392,6 +392,21 @@ src/lib/layers/
   __fixtures__/     captured feature properties for popup regression tests (§8)
 ```
 
+### Manifest discovery and reload
+
+The registry reads two directories: built-in manifests shipped in the repo, and the operator
+drop-in directory bind-mounted at `/app/layers`. Drop-in manifests are merged over built-ins by
+`id`, so an operator can override a shipped layer (to change a colour or a poll interval)
+without forking.
+
+Discovery runs **at server start, and again on an explicit reload** exposed as an action in the
+plugins diagnostics panel (and as `POST /api/layer-source?reload=1`). Adding a drop-in layer
+therefore requires **no rebuild and no container restart** — the operator drops the file in and
+presses reload. Reload re-runs validation, so a malformed file surfaces its error immediately
+rather than at the next restart. This is the precise meaning of "loadable without a rebuild";
+it is stated here because "the server scans at startup" and "no restart required" would
+otherwise contradict each other.
+
 ### Engine surface
 
 ```ts
@@ -480,11 +495,31 @@ The hook executes plans and writes results into the existing `dataRef` + `dataVe
 That indirection is a deliberate performance choice — one re-render per refresh rather than per
 render — and is retained.
 
-**One manifest is one fetch, however many toggles it has.** The engine fetches when *any*
-variant is active. This turns three hand-written special cases into default behaviour:
-`flights`' four toggles off one `/api/flights` call become four datasets; `satellites`' six
-category toggles become six filters over one array; `cf_outages` + `cf_attacks` sharing one
-`/api/cloudflare-radar` request becomes ordinary. `maritime`'s three sources likewise.
+**Fetches are deduplicated by resolved request, not by manifest.** A dataset is fetched when
+any variant bound to it is active. The planner then groups the resulting fetches by their
+fully-resolved `(url, headers)` pair and issues **one request per distinct pair**, fanning the
+response out to every dataset that referenced it via each dataset's own `arrayPath`.
+
+This one rule subsumes every hand-written special case in the current code, and it is why the
+rule is stated over requests rather than over manifests:
+
+- `flights` — four toggles, four datasets, one `/api/flights` URL, four `arrayPath`s → **one request**.
+- `cf_outages` + `cf_attacks` — two datasets, one `/api/cloudflare-radar` URL, two `arrayPath`s → **one request**.
+- `maritime` — three datasets, one `/api/maritime` URL, three `arrayPath`s → **one request**.
+- `satellites` — one dataset, six variants distinguished by `filter` rather than by dataset → **one request**.
+- `balloons` — two datasets with genuinely *different* SondeHub URLs → **two requests**, correctly.
+
+A "one manifest, one fetch" rule would have been wrong for `balloons`, whose two variants come
+from different endpoints. Deduplicating on the resolved request is both simpler and correct in
+every case.
+
+**Variant `filter`s are row-level predicates**, applied to upstream rows before features are
+built — not MapLibre layer filters. This makes them work identically for `geojson` layers and
+for custom renderers; `satellites` filters its catalogue by `category` in exactly this way
+today, and the custom WebGL renderer never sees a MapLibre filter.
+
+**Panel counts** come from `countFrom`'s dataset. For a variant carrying a `filter`, the count
+is the post-filter row count — matching today's per-category satellite counts.
 
 | Mode | Behaviour | Existing precedent |
 |---|---|---|
@@ -542,9 +577,11 @@ which is precisely why the escape hatch exists. `lat`, `lon`, `alt`, `vel_h`, `t
 `type`, `modulation` map onto the fields the old popup showed; the ascending/descending/floating
 `status` is derived from vertical rate. `duration` accepts only an enum of values.
 
-Two variants off one fetch group: **Amateur Balloons** (`/amateur/telemetry`, `duration=1d`,
-default on) and **Radiosondes** (`/sondes/telemetry`, `duration=1h`, far higher volume, default
-off). **Proves the adapter path.**
+Two datasets, and therefore genuinely **two requests** — the endpoints differ:
+**Amateur Balloons** (`/amateur/telemetry`, `duration=1d`, default on) and **Radiosondes**
+(`/sondes/telemetry`, `duration=1h`, far higher volume, default off). Each is its own
+`DatasetSpec` with its own `source`, and each is fetched only while its variant is active.
+**Proves the adapter path.**
 
 ### `war_alerts` — ACLED, key-gated
 
@@ -590,6 +627,12 @@ unrecurrable by deriving the set; that is the permanent fix, but the immediate o
 ---
 
 ## 8. Staged rollout
+
+**On plan granularity.** This design is deliberately larger than one implementation plan.
+Stages 0–2 are novel work and warrant a detailed plan with per-task verification. Stages 3–4
+are repeated applications of a single procedure — migrate one layer, capture its popup fixture,
+run the checklist — and should be planned as that procedure plus a layer inventory, not as
+thirty bespoke tasks. Stage 5 is deletion, gated on stages 3–4 being complete.
 
 ### Stage 0 — baseline and the click fix
 
@@ -677,8 +720,8 @@ source clears; theme switch → colours still track the palette.
 
 ## 9. Success criteria
 
-1. Adding a layer whose upstream returns clean JSON requires **one new JSON file** and no
-   code changes, no rebuild, and no restart beyond re-reading the drop-in directory.
+1. Adding a layer whose upstream returns clean JSON requires **one new JSON file** dropped into
+   `/app/layers` plus a reload action — no code change, no rebuild, no container restart.
 2. Adding a layer needing real parsing requires **one JSON file plus one adapter function**.
 3. `CLICKABLE_LAYERS`, the hover array, the `sources` array and the `setVis` block no longer
    exist as hand-maintained lists.
