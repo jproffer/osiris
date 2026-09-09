@@ -1389,3 +1389,320 @@ loadLayerOnce helper already fixes this -- mark before awaiting, release
 the mark if nothing landed -- but only two layers use it. One code path
 means every layer gets it."
 ```
+
+---
+
+### Task 7: The credential store and server-side substitution
+
+**Files:**
+- Create: `src/lib/layers/config-store.ts`
+- Create: `src/lib/layers/substitute.ts`
+- Test: `src/lib/layers/config-store.test.ts`
+- Test: `src/lib/layers/substitute.test.ts`
+
+**Interfaces:**
+- Consumes: `node:fs/promises`, `node:path`.
+- Produces:
+  - `readConfigValue(key: string): Promise<string | undefined>`
+  - `configStatus(keys: string[]): Promise<Record<string, { configured: boolean; source: 'env' | 'store' | null }>>`
+  - `writeConfigValue(key: string, value: string): Promise<void>`
+  - `deleteConfigValue(key: string): Promise<void>`
+  - `setConfigDir(dir: string): void` — test seam only
+  - `substitute(template: string, resolve: (key: string) => string | undefined, now?: Date): { text: string; missing: string[] }`
+
+**Context.** Two substitution forms, both expanded **only on the server**: `{config.KEY}` for a declared credential, and a closed set of date tokens `{today}`, `{today-1d}`, `{today-7d}` formatted `YYYY-MM-DD`. The date tokens exist because Safecast's `since` parameter needs one — `order=captured_at desc` is silently ignored by that API, so `since` is the only way to get recent rows. This is not a template language and must not grow into one.
+
+**Environment wins.** If `ACLED_API_KEY` is in `process.env`, it is used and the store is not consulted. An operator who set a key in `docker-compose.yml` must never have it silently shadowed by something typed into a browser.
+
+**`substitute` reports what it could not resolve** rather than emitting an empty string, so `/api/layer-source` can return a clear "this layer needs a key" response instead of firing a request with a blank token and reporting a confusing upstream 401.
+
+- [ ] **Step 1: Write the failing test — `src/lib/layers/substitute.test.ts`**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { substitute } from './substitute';
+
+const at = new Date('2026-09-09T12:00:00.000Z');
+
+describe('substitute', () => {
+  it('leaves a template with no tokens alone', () => {
+    const r = substitute('https://example.org/a', () => undefined, at);
+    expect(r.text).toBe('https://example.org/a');
+    expect(r.missing).toEqual([]);
+  });
+
+  it('expands {today} and the offset forms', () => {
+    expect(substitute('{today}', () => undefined, at).text).toBe('2026-09-09');
+    expect(substitute('{today-1d}', () => undefined, at).text).toBe('2026-09-08');
+    expect(substitute('{today-7d}', () => undefined, at).text).toBe('2026-09-02');
+  });
+
+  it('expands a config token via the resolver', () => {
+    const r = substitute('Bearer {config.TOKEN}', k => (k === 'TOKEN' ? 'abc123' : undefined), at);
+    expect(r.text).toBe('Bearer abc123');
+    expect(r.missing).toEqual([]);
+  });
+
+  it('reports an unresolved config token instead of emitting a blank', () => {
+    const r = substitute('Bearer {config.TOKEN}', () => undefined, at);
+    expect(r.missing).toEqual(['TOKEN']);
+  });
+
+  it('reports each missing key once', () => {
+    const r = substitute('{config.A}/{config.A}/{config.B}', () => undefined, at);
+    expect(r.missing.sort()).toEqual(['A', 'B']);
+  });
+
+  it('leaves an unrecognised token untouched rather than guessing', () => {
+    const r = substitute('{tomorrow}', () => undefined, at);
+    expect(r.text).toBe('{tomorrow}');
+    expect(r.missing).toEqual([]);
+  });
+
+  it('handles a realistic Safecast URL', () => {
+    const r = substitute(
+      'https://api.safecast.org/measurements.json?since={today-1d}&limit=2000&unit=cpm',
+      () => undefined, at,
+    );
+    expect(r.text).toBe('https://api.safecast.org/measurements.json?since=2026-09-08&limit=2000&unit=cpm');
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run src/lib/layers/substitute.test.ts`
+Expected: FAIL — cannot resolve `./substitute`.
+
+- [ ] **Step 3: Write `src/lib/layers/substitute.ts`**
+
+```ts
+/**
+ * The two substitutions a manifest may use, expanded server-side only.
+ *
+ * Deliberately not a template language: a closed set of date tokens, plus
+ * {config.KEY} for a declared credential. The date tokens exist because
+ * Safecast's `since` parameter is the only way to get recent rows from that
+ * API -- `order=captured_at desc` is silently ignored by it.
+ */
+const DATE_TOKEN = /^today(?:-(\d+)d)?$/;
+
+function isoDay(base: Date, daysBack: number): string {
+  const d = new Date(base.getTime() - daysBack * 86400000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+export function substitute(
+  template: string,
+  resolve: (key: string) => string | undefined,
+  now: Date = new Date(),
+): { text: string; missing: string[] } {
+  const missing = new Set<string>();
+
+  const text = template.replace(/\{([^}]+)\}/g, (whole, token: string) => {
+    if (token.startsWith('config.')) {
+      const key = token.slice('config.'.length);
+      const value = resolve(key);
+      if (value === undefined || value === '') { missing.add(key); return whole; }
+      return value;
+    }
+    const m = DATE_TOKEN.exec(token);
+    if (m) return isoDay(now, m[1] ? Number(m[1]) : 0);
+    // Unrecognised tokens are left exactly as written rather than guessed at.
+    return whole;
+  });
+
+  return { text, missing: [...missing] };
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run src/lib/layers/substitute.test.ts`
+Expected: PASS, 7 tests.
+
+- [ ] **Step 5: Write the failing test — `src/lib/layers/config-store.test.ts`**
+
+```ts
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setConfigDir, readConfigValue, writeConfigValue, deleteConfigValue, configStatus } from './config-store';
+
+let dir: string;
+
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), 'osiris-cfg-'));
+  setConfigDir(dir);
+  delete process.env.TEST_LAYER_KEY;
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+  delete process.env.TEST_LAYER_KEY;
+});
+
+describe('config-store', () => {
+  it('returns undefined for an unset key', async () => {
+    expect(await readConfigValue('TEST_LAYER_KEY')).toBeUndefined();
+  });
+
+  it('round-trips a written value', async () => {
+    await writeConfigValue('TEST_LAYER_KEY', 'abc123');
+    expect(await readConfigValue('TEST_LAYER_KEY')).toBe('abc123');
+  });
+
+  it('lets the environment win over a stored value', async () => {
+    await writeConfigValue('TEST_LAYER_KEY', 'from-store');
+    process.env.TEST_LAYER_KEY = 'from-env';
+    expect(await readConfigValue('TEST_LAYER_KEY')).toBe('from-env');
+  });
+
+  it('deletes a stored value', async () => {
+    await writeConfigValue('TEST_LAYER_KEY', 'abc123');
+    await deleteConfigValue('TEST_LAYER_KEY');
+    expect(await readConfigValue('TEST_LAYER_KEY')).toBeUndefined();
+  });
+
+  it('reports status without ever revealing a value', async () => {
+    await writeConfigValue('TEST_LAYER_KEY', 'super-secret');
+    const status = await configStatus(['TEST_LAYER_KEY', 'ABSENT_KEY']);
+    expect(status.TEST_LAYER_KEY).toEqual({ configured: true, source: 'store' });
+    expect(status.ABSENT_KEY).toEqual({ configured: false, source: null });
+    expect(JSON.stringify(status)).not.toContain('super-secret');
+  });
+
+  it('reports env as the source when the environment supplies the value', async () => {
+    process.env.TEST_LAYER_KEY = 'from-env';
+    const status = await configStatus(['TEST_LAYER_KEY']);
+    expect(status.TEST_LAYER_KEY).toEqual({ configured: true, source: 'env' });
+  });
+
+  it('writes the store file with owner-only permissions', async () => {
+    await writeConfigValue('TEST_LAYER_KEY', 'abc123');
+    const { stat } = await import('node:fs/promises');
+    const s = await stat(join(dir, 'layer-config.json'));
+    expect(s.mode & 0o777).toBe(0o600);
+  });
+
+  it('survives a corrupt store file rather than throwing', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(join(dir, 'layer-config.json'), 'not json at all');
+    expect(await readConfigValue('TEST_LAYER_KEY')).toBeUndefined();
+    await writeConfigValue('TEST_LAYER_KEY', 'recovered');
+    expect(await readConfigValue('TEST_LAYER_KEY')).toBe('recovered');
+    expect(JSON.parse(await readFile(join(dir, 'layer-config.json'), 'utf8'))).toBeTruthy();
+  });
+});
+```
+
+- [ ] **Step 6: Run it to verify it fails**
+
+Run: `npx vitest run src/lib/layers/config-store.test.ts`
+Expected: FAIL — cannot resolve `./config-store`.
+
+- [ ] **Step 7: Write `src/lib/layers/config-store.ts`**
+
+```ts
+import { readFile, writeFile, mkdir, chmod } from 'node:fs/promises';
+import { join } from 'node:path';
+
+/**
+ * Runtime credential store, deliberately separate from the manifest
+ * directory: manifests are shareable and commit-friendly, secrets are
+ * neither, and one .gitignore mistake must not publish a token.
+ *
+ * Values are write-only from the outside world. There is no endpoint that
+ * returns one, masked or otherwise -- only configStatus(), which reports
+ * whether a key is set and where it came from.
+ */
+let configDir = process.env.OSIRIS_CONFIG_DIR ?? '/app/config';
+
+/** Test seam. Production reads OSIRIS_CONFIG_DIR or falls back to /app/config. */
+export function setConfigDir(dir: string): void {
+  configDir = dir;
+}
+
+function storePath(): string {
+  return join(configDir, 'layer-config.json');
+}
+
+async function readStore(): Promise<Record<string, string>> {
+  try {
+    const raw = await readFile(storePath(), 'utf8');
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    // Missing or corrupt: an unreadable store must not take the app down, and
+    // the next write repairs it.
+    return {};
+  }
+}
+
+async function writeStore(data: Record<string, string>): Promise<void> {
+  await mkdir(configDir, { recursive: true });
+  await writeFile(storePath(), JSON.stringify(data, null, 2), { mode: 0o600 });
+  // writeFile only applies `mode` when it creates the file, so an existing
+  // file keeps whatever permissions it had.
+  await chmod(storePath(), 0o600);
+}
+
+export async function readConfigValue(key: string): Promise<string | undefined> {
+  const fromEnv = process.env[key];
+  if (fromEnv) return fromEnv;
+  const store = await readStore();
+  return store[key] || undefined;
+}
+
+export async function writeConfigValue(key: string, value: string): Promise<void> {
+  const store = await readStore();
+  store[key] = value;
+  await writeStore(store);
+}
+
+export async function deleteConfigValue(key: string): Promise<void> {
+  const store = await readStore();
+  delete store[key];
+  await writeStore(store);
+}
+
+export async function configStatus(
+  keys: string[],
+): Promise<Record<string, { configured: boolean; source: 'env' | 'store' | null }>> {
+  const store = await readStore();
+  const out: Record<string, { configured: boolean; source: 'env' | 'store' | null }> = {};
+  for (const key of keys) {
+    if (process.env[key]) out[key] = { configured: true, source: 'env' };
+    else if (store[key]) out[key] = { configured: true, source: 'store' };
+    else out[key] = { configured: false, source: null };
+  }
+  return out;
+}
+```
+
+- [ ] **Step 8: Run it to verify it passes**
+
+Run: `npx vitest run src/lib/layers/config-store.test.ts`
+Expected: PASS, 8 tests.
+
+- [ ] **Step 9: Run the whole suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add src/lib/layers/config-store.ts src/lib/layers/config-store.test.ts \
+        src/lib/layers/substitute.ts src/lib/layers/substitute.test.ts
+git commit -m "feat(layers): runtime credential store and server-side substitution
+
+Values are write-only from outside: configStatus reports whether a key is
+set and where it came from, and no endpoint returns a value, masked or
+otherwise. The environment wins over the store so a key set in
+docker-compose is never silently shadowed by something typed into a
+browser. The store lives outside the manifest directory because manifests
+are shareable and secrets are not."
+```
