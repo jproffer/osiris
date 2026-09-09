@@ -1706,3 +1706,832 @@ docker-compose is never silently shadowed by something typed into a
 browser. The store lives outside the manifest directory because manifests
 are shareable and secrets are not."
 ```
+
+---
+
+### Task 8: The manifest registry — discovery, merge and reload
+
+**Files:**
+- Create: `src/lib/layers/registry.ts`
+- Test: `src/lib/layers/registry.test.ts`
+
+**Interfaces:**
+- Consumes: `validateManifest` from `./validate`; `NormalisedManifest` from `./types`.
+- Produces:
+  - `setManifestDirs(builtin: string, dropin: string): void` — test seam
+  - `loadRegistry(): Promise<Registry>` — cached
+  - `reloadRegistry(): Promise<Registry>` — forces a re-read
+  - `type Registry = { manifests: NormalisedManifest[]; errors: string[]; loadedAt: number }`
+
+**Context.** Two directories: built-ins shipped at `src/lib/layers/manifests/`, and the operator drop-in directory bind-mounted at `/app/layers`. Drop-ins merge over built-ins **by id**, so an operator can override a shipped layer's colour or poll interval without forking.
+
+Discovery runs at first call and again on explicit reload, which is what makes "no rebuild, no container restart" true. A **missing drop-in directory is normal**, not an error — most installs won't have one.
+
+Invalid manifests are excluded from `manifests` but their errors are retained in `errors`, so the plugins panel can name the file and the fault.
+
+- [ ] **Step 1: Write the failing test — `src/lib/layers/registry.test.ts`**
+
+```ts
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { setManifestDirs, loadRegistry, reloadRegistry } from './registry';
+
+let root: string, builtin: string, dropin: string;
+
+const manifest = (id: string, extra: Record<string, unknown> = {}) => JSON.stringify({
+  id, label: id, group: 'HAZARD',
+  source: { kind: 'http', format: 'json', url: 'https://example.org/x', lat: 'lat', lng: 'lng', properties: {}, refresh: { mode: 'once' } },
+  layers: [{ suffix: 'dots', type: 'circle' }],
+  ...extra,
+});
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), 'osiris-reg-'));
+  builtin = join(root, 'builtin');
+  dropin = join(root, 'dropin');
+  await mkdir(builtin, { recursive: true });
+  setManifestDirs(builtin, dropin);
+});
+
+afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+describe('registry', () => {
+  it('loads built-in manifests', async () => {
+    await writeFile(join(builtin, 'radiation.json'), manifest('radiation'));
+    const r = await reloadRegistry();
+    expect(r.manifests.map(m => m.id)).toEqual(['radiation']);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('treats a missing drop-in directory as normal', async () => {
+    await writeFile(join(builtin, 'radiation.json'), manifest('radiation'));
+    const r = await reloadRegistry();
+    expect(r.errors).toEqual([]);
+    expect(r.manifests).toHaveLength(1);
+  });
+
+  it('adds drop-in manifests alongside built-ins', async () => {
+    await writeFile(join(builtin, 'radiation.json'), manifest('radiation'));
+    await mkdir(dropin, { recursive: true });
+    await writeFile(join(dropin, 'custom.json'), manifest('custom'));
+    const r = await reloadRegistry();
+    expect(r.manifests.map(m => m.id).sort()).toEqual(['custom', 'radiation']);
+  });
+
+  it('lets a drop-in override a built-in of the same id', async () => {
+    await writeFile(join(builtin, 'radiation.json'), manifest('radiation', { label: 'Shipped' }));
+    await mkdir(dropin, { recursive: true });
+    await writeFile(join(dropin, 'radiation.json'), manifest('radiation', { label: 'Overridden' }));
+    const r = await reloadRegistry();
+    expect(r.manifests).toHaveLength(1);
+    expect(r.manifests[0].label).toBe('Overridden');
+  });
+
+  it('reports a malformed manifest by filename and keeps the valid ones', async () => {
+    await writeFile(join(builtin, 'good.json'), manifest('good'));
+    await writeFile(join(builtin, 'bad.json'), '{ not valid json');
+    const r = await reloadRegistry();
+    expect(r.manifests.map(m => m.id)).toEqual(['good']);
+    expect(r.errors.join(' ')).toContain('bad.json');
+  });
+
+  it('reports a manifest that fails validation, naming the fault', async () => {
+    await writeFile(join(builtin, 'bad.json'), JSON.stringify({ id: 'x', label: 'X', group: 'G' }));
+    const r = await reloadRegistry();
+    expect(r.manifests).toEqual([]);
+    expect(r.errors.join(' ')).toContain('bad.json');
+    expect(r.errors.join(' ')).toContain('datasets');
+  });
+
+  it('ignores non-JSON files', async () => {
+    await writeFile(join(builtin, 'radiation.json'), manifest('radiation'));
+    await writeFile(join(builtin, 'README.md'), '# not a manifest');
+    const r = await reloadRegistry();
+    expect(r.manifests).toHaveLength(1);
+    expect(r.errors).toEqual([]);
+  });
+
+  it('caches, and reload picks up a newly dropped file', async () => {
+    await writeFile(join(builtin, 'radiation.json'), manifest('radiation'));
+    const first = await loadRegistry();
+    await mkdir(dropin, { recursive: true });
+    await writeFile(join(dropin, 'late.json'), manifest('late'));
+    expect((await loadRegistry()).manifests).toHaveLength(first.manifests.length);
+    expect((await reloadRegistry()).manifests.map(m => m.id).sort()).toEqual(['late', 'radiation']);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run src/lib/layers/registry.test.ts`
+Expected: FAIL — cannot resolve `./registry`.
+
+- [ ] **Step 3: Write `src/lib/layers/registry.ts`**
+
+```ts
+import { readdir, readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import type { NormalisedManifest } from './types';
+import { validateManifest } from './validate';
+
+export interface Registry {
+  manifests: NormalisedManifest[];
+  errors: string[];
+  loadedAt: number;
+}
+
+let builtinDir = join(process.cwd(), 'src', 'lib', 'layers', 'manifests');
+let dropinDir = process.env.OSIRIS_LAYERS_DIR ?? '/app/layers';
+let cached: Registry | null = null;
+
+/** Test seam. Production uses the packaged manifests plus OSIRIS_LAYERS_DIR. */
+export function setManifestDirs(builtin: string, dropin: string): void {
+  builtinDir = builtin;
+  dropinDir = dropin;
+  cached = null;
+}
+
+async function readDir(dir: string, errors: string[], required: boolean) {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    // A missing drop-in directory is the normal case for most installs.
+    if (required) errors.push(`${dir}: manifest directory could not be read`);
+    return [] as Array<{ origin: string; raw: unknown }>;
+  }
+  const out: Array<{ origin: string; raw: unknown }> = [];
+  for (const name of names.filter(n => n.endsWith('.json')).sort()) {
+    try {
+      out.push({ origin: name, raw: JSON.parse(await readFile(join(dir, name), 'utf8')) });
+    } catch (e) {
+      errors.push(`${name}: not valid JSON (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
+  return out;
+}
+
+export async function reloadRegistry(): Promise<Registry> {
+  const errors: string[] = [];
+  const files = [
+    ...(await readDir(builtinDir, errors, true)),
+    // Drop-ins are read second so they overwrite a built-in of the same id.
+    ...(await readDir(dropinDir, errors, false)),
+  ];
+
+  const byId = new Map<string, NormalisedManifest>();
+  for (const { origin, raw } of files) {
+    const result = validateManifest(raw, origin);
+    if (result.ok) byId.set(result.manifest.id, result.manifest);
+    else errors.push(...result.errors);
+  }
+
+  cached = { manifests: [...byId.values()], errors, loadedAt: Date.now() };
+  return cached;
+}
+
+export async function loadRegistry(): Promise<Registry> {
+  return cached ?? reloadRegistry();
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run src/lib/layers/registry.test.ts`
+Expected: PASS, 8 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/layers/registry.ts src/lib/layers/registry.test.ts
+git commit -m "feat(layers): manifest registry with drop-in override and reload
+
+Drop-ins merge over built-ins by id, so an operator can retune a shipped
+layer without forking. A missing drop-in directory is the normal case,
+not an error. Invalid manifests are excluded but their errors are kept
+with the filename attached, so the plugins panel can show an operator
+what they typoed instead of leaving it in container logs."
+```
+
+---
+
+### Task 9: Parsing and mapping upstream responses into features
+
+**Files:**
+- Create: `src/lib/layers/http-source.ts`
+- Test: `src/lib/layers/http-source.test.ts`
+
+**Interfaces:**
+- Consumes: `GeoFeature` from `./types`.
+- Produces:
+  - `getPath(obj: unknown, path: string): unknown`
+  - `parseCsv(text: string): Record<string, string>[]`
+  - `extractRows(format: 'json' | 'geojson' | 'csv', text: string, arrayPath?: string): unknown[]`
+  - `rowsToFeatures(rows: unknown[], opts: { lat: string; lng: string; properties: Record<string, string>; passthroughGeometry?: boolean }): GeoFeature[]`
+
+**Context.** This is deliberately a separate module from the route, because route files are awkward to unit-test and this is where the fiddly correctness lives. `npm test` matches `src/**/*.test.ts` only, so logic that needs a test must not live in `src/app/api/**`.
+
+A row whose coordinates are missing or non-numeric is **dropped, not emitted at 0,0** — otherwise every unparseable record piles up in the Gulf of Guinea, which is a classic map bug.
+
+- [ ] **Step 1: Write the failing test — `src/lib/layers/http-source.test.ts`**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { getPath, parseCsv, extractRows, rowsToFeatures } from './http-source';
+
+describe('getPath', () => {
+  it('reads a top-level key', () => {
+    expect(getPath({ a: 1 }, 'a')).toBe(1);
+  });
+  it('reads a nested path', () => {
+    expect(getPath({ a: { b: { c: 'x' } } }, 'a.b.c')).toBe('x');
+  });
+  it('reads through an array index', () => {
+    expect(getPath({ a: [{ b: 2 }] }, 'a.0.b')).toBe(2);
+  });
+  it('returns undefined for a missing path without throwing', () => {
+    expect(getPath({ a: 1 }, 'a.b.c')).toBeUndefined();
+    expect(getPath(null, 'a')).toBeUndefined();
+  });
+});
+
+describe('parseCsv', () => {
+  it('parses a header and rows', () => {
+    expect(parseCsv('hex,good,bad\nabc,10,2\ndef,5,0')).toEqual([
+      { hex: 'abc', good: '10', bad: '2' },
+      { hex: 'def', good: '5', bad: '0' },
+    ]);
+  });
+  it('ignores a trailing newline and blank lines', () => {
+    expect(parseCsv('a,b\n1,2\n\n')).toEqual([{ a: '1', b: '2' }]);
+  });
+  it('handles quoted fields containing commas', () => {
+    expect(parseCsv('a,b\n"x,y",2')).toEqual([{ a: 'x,y', b: '2' }]);
+  });
+  it('returns an empty array for an empty document', () => {
+    expect(parseCsv('')).toEqual([]);
+    expect(parseCsv('justheaders,only')).toEqual([]);
+  });
+});
+
+describe('extractRows', () => {
+  it('returns a top-level JSON array', () => {
+    expect(extractRows('json', '[{"a":1}]')).toEqual([{ a: 1 }]);
+  });
+  it('follows arrayPath into a JSON object', () => {
+    expect(extractRows('json', '{"data":{"items":[{"a":1}]}}', 'data.items')).toEqual([{ a: 1 }]);
+  });
+  it('returns an empty array when arrayPath misses', () => {
+    expect(extractRows('json', '{"data":{}}', 'data.items')).toEqual([]);
+  });
+  it('returns features from a GeoJSON FeatureCollection', () => {
+    const fc = '{"type":"FeatureCollection","features":[{"type":"Feature","geometry":{"type":"Point","coordinates":[1,2]},"properties":{"n":"x"}}]}';
+    expect(extractRows('geojson', fc)).toHaveLength(1);
+  });
+  it('parses CSV', () => {
+    expect(extractRows('csv', 'a,b\n1,2')).toEqual([{ a: '1', b: '2' }]);
+  });
+  it('returns an empty array for unparseable input rather than throwing', () => {
+    expect(extractRows('json', 'not json')).toEqual([]);
+  });
+});
+
+describe('rowsToFeatures', () => {
+  const opts = { lat: 'latitude', lng: 'longitude', properties: { value: 'value', place: 'location_name' } };
+
+  it('maps coordinates and the declared properties', () => {
+    const out = rowsToFeatures([{ latitude: 37.6, longitude: -112.1, value: 48, location_name: 'Cedar City', extra: 'dropped' }], opts);
+    expect(out).toHaveLength(1);
+    expect(out[0].geometry).toEqual({ type: 'Point', coordinates: [-112.1, 37.6] });
+    expect(out[0].properties).toEqual({ value: 48, place: 'Cedar City' });
+  });
+
+  it('coerces numeric strings in coordinates', () => {
+    const out = rowsToFeatures([{ latitude: '37.6', longitude: '-112.1' }], opts);
+    expect(out[0].geometry).toEqual({ type: 'Point', coordinates: [-112.1, 37.6] });
+  });
+
+  it('drops rows with missing or non-numeric coordinates instead of placing them at 0,0', () => {
+    const out = rowsToFeatures([
+      { latitude: 1, longitude: 2 },
+      { latitude: null, longitude: 2 },
+      { longitude: 2 },
+      { latitude: 'nope', longitude: 2 },
+    ], opts);
+    expect(out).toHaveLength(1);
+  });
+
+  it('drops coordinates outside valid ranges', () => {
+    const out = rowsToFeatures([{ latitude: 200, longitude: 2 }, { latitude: 1, longitude: 999 }], opts);
+    expect(out).toEqual([]);
+  });
+
+  it('reads nested property paths', () => {
+    const out = rowsToFeatures(
+      [{ latitude: 1, longitude: 2, gap: { distanceKm: '40' } }],
+      { lat: 'latitude', lng: 'longitude', properties: { distance: 'gap.distanceKm' } },
+    );
+    expect(out[0].properties).toEqual({ distance: '40' });
+  });
+
+  it('passes GeoJSON geometry through untouched', () => {
+    const rows = [{ type: 'Feature', geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] }, properties: { name: 'cable' } }];
+    const out = rowsToFeatures(rows, { lat: '', lng: '', properties: { name: 'name' }, passthroughGeometry: true });
+    expect(out[0].geometry).toEqual({ type: 'LineString', coordinates: [[0, 0], [1, 1]] });
+    expect(out[0].properties).toEqual({ name: 'cable' });
+  });
+
+  it('drops GeoJSON rows with no geometry', () => {
+    const rows = [{ type: 'Feature', geometry: null, properties: {} }];
+    expect(rowsToFeatures(rows, { lat: '', lng: '', properties: {}, passthroughGeometry: true })).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `npx vitest run src/lib/layers/http-source.test.ts`
+Expected: FAIL — cannot resolve `./http-source`.
+
+- [ ] **Step 3: Write `src/lib/layers/http-source.ts`**
+
+```ts
+import type { GeoFeature } from './types';
+
+/** Dot-path accessor: 'gap.distanceKm', 'a.0.b'. Never throws. */
+export function getPath(obj: unknown, path: string): unknown {
+  if (!path) return undefined;
+  let cur: unknown = obj;
+  for (const part of path.split('.')) {
+    if (cur === null || cur === undefined) return undefined;
+    if (typeof cur !== 'object') return undefined;
+    cur = (cur as Record<string, unknown>)[part];
+  }
+  return cur;
+}
+
+/** Split one CSV line, honouring double-quoted fields. */
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch === '"' && line[i + 1] === '"') { cur += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else cur += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out;
+}
+
+export function parseCsv(text: string): Record<string, string>[] {
+  const lines = text.split('\n').map(l => l.replace(/\r$/, '')).filter(l => l.trim() !== '');
+  if (lines.length < 2) return [];
+  const header = splitCsvLine(lines[0]);
+  return lines.slice(1).map(line => {
+    const cells = splitCsvLine(line);
+    const row: Record<string, string> = {};
+    header.forEach((h, i) => { row[h] = cells[i] ?? ''; });
+    return row;
+  });
+}
+
+export function extractRows(
+  format: 'json' | 'geojson' | 'csv',
+  text: string,
+  arrayPath?: string,
+): unknown[] {
+  if (format === 'csv') return parseCsv(text);
+  let parsed: unknown;
+  try { parsed = JSON.parse(text); } catch { return []; }
+
+  if (format === 'geojson') {
+    const features = (parsed as { features?: unknown })?.features;
+    return Array.isArray(features) ? features : [];
+  }
+  const target = arrayPath ? getPath(parsed, arrayPath) : parsed;
+  return Array.isArray(target) ? target : [];
+}
+
+function asCoord(v: unknown): number | null {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function rowsToFeatures(
+  rows: unknown[],
+  opts: { lat: string; lng: string; properties: Record<string, string>; passthroughGeometry?: boolean },
+): GeoFeature[] {
+  const out: GeoFeature[] = [];
+
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+
+    const properties: Record<string, unknown> = {};
+    const propSource = opts.passthroughGeometry
+      ? ((row as { properties?: unknown }).properties ?? row)
+      : row;
+    for (const [name, path] of Object.entries(opts.properties)) {
+      properties[name] = getPath(propSource, path);
+    }
+
+    if (opts.passthroughGeometry) {
+      const geometry = (row as { geometry?: unknown }).geometry;
+      if (!geometry || typeof geometry !== 'object') continue;
+      out.push({ type: 'Feature', geometry: geometry as GeoFeature['geometry'], properties });
+      continue;
+    }
+
+    const lat = asCoord(getPath(row, opts.lat));
+    const lng = asCoord(getPath(row, opts.lng));
+    // A row without usable coordinates is dropped. Emitting it at 0,0 would
+    // pile every unparseable record into the Gulf of Guinea.
+    if (lat === null || lng === null) continue;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) continue;
+
+    out.push({ type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] }, properties });
+  }
+
+  return out;
+}
+```
+
+- [ ] **Step 4: Run it to verify it passes**
+
+Run: `npx vitest run src/lib/layers/http-source.test.ts`
+Expected: PASS, 21 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/lib/layers/http-source.ts src/lib/layers/http-source.test.ts
+git commit -m "feat(layers): parse and map upstream responses into features
+
+Kept out of the route because vitest only matches src/**/*.test.ts, so
+logic living under src/app/api is untestable here -- and this is where
+the fiddly correctness sits. Rows without usable coordinates are dropped
+rather than emitted at 0,0, which would pile every unparseable record
+into the Gulf of Guinea."
+```
+
+---
+
+### Task 10: Adapter contract and dataset serving
+
+**Files:**
+- Create: `src/lib/layers/adapters/index.ts`
+- Create: `src/lib/layers/serve.ts`
+- Test: `src/lib/layers/serve.test.ts`
+
+**Interfaces:**
+- Consumes: `extractRows`, `rowsToFeatures` from `./http-source`; `substitute` from `./substitute`; `NormalisedManifest`, `GeoFeature` from `./types`.
+- Produces:
+  - `interface AdapterContext { params: Record<string, unknown>; bbox?: Bbox; config(key: string): Promise<string | undefined> }`
+  - `type SourceAdapter = (ctx: AdapterContext) => Promise<GeoFeature[]>`
+  - `const ADAPTERS: Record<string, SourceAdapter>`
+  - `registerAdapter(name: string, fn: SourceAdapter): void`
+  - `serveDatasets(manifest, datasetKeys, bbox, deps): Promise<ServeResult>`
+  - `interface ServeDeps { fetchText; readConfig; adapters; now? }`
+
+**Context.** All I/O is injected, so `serveDatasets` is testable with fakes under vitest's `node` environment. The route in Task 11 supplies the real dependencies: `safeFetch` from `src/lib/ssrf-guard.ts` (validates every redirect hop against reserved ranges) wrapped in `cachedSource` from `src/lib/sourceCache.ts` (TTL, in-flight dedup, stale-on-error).
+
+**This is where the spec's request deduplication happens.** `cachedSource` is keyed by the *resolved* URL, so a manifest whose datasets share a URL — `flights` with four `arrayPath`s, `cf_outages`+`cf_attacks`, `maritime` with three — costs exactly one upstream request. `balloons`, whose two datasets have different SondeHub URLs, correctly costs two.
+
+**Missing credentials return HTTP 428** with the list of unset keys, so the UI can say "this layer needs a key" rather than firing a request with a blank token and surfacing a confusing upstream 401.
+
+- [ ] **Step 1: Write `src/lib/layers/adapters/index.ts`**
+
+```ts
+import type { GeoFeature } from '../types';
+
+export interface Bbox { west: number; south: number; east: number; north: number }
+
+export interface AdapterContext {
+  params: Record<string, unknown>;
+  bbox?: Bbox;
+  /** Resolves a declared credential. Environment wins over the store. */
+  config(key: string): Promise<string | undefined>;
+}
+
+export type SourceAdapter = (ctx: AdapterContext) => Promise<GeoFeature[]>;
+
+/**
+ * Named adapters for sources a manifest cannot describe -- H3 decoding, a
+ * two-level response keyed by callsign, a 40-source fan-out. Registered here
+ * rather than discovered, because an adapter is compiled code and must be
+ * reviewable.
+ */
+export const ADAPTERS: Record<string, SourceAdapter> = {};
+
+export function registerAdapter(name: string, fn: SourceAdapter): void {
+  ADAPTERS[name] = fn;
+}
+```
+
+- [ ] **Step 2: Write the failing test — `src/lib/layers/serve.test.ts`**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { serveDatasets } from './serve';
+import type { NormalisedManifest, SourceSpec } from './types';
+import type { ServeDeps } from './serve';
+
+const httpSource = (url: string, over: Partial<Record<string, unknown>> = {}): SourceSpec => ({
+  kind: 'http', url, format: 'json', lat: 'lat', lng: 'lng',
+  properties: { n: 'name' }, refresh: { mode: 'once' }, ...over,
+} as SourceSpec);
+
+function manifest(datasets: NormalisedManifest['datasets']): NormalisedManifest {
+  return {
+    id: 'test', label: 'T', group: 'G', defaultOn: false, countFrom: datasets[0].key,
+    requiredConfig: [], variants: [], render: { kind: 'geojson' }, datasets,
+  };
+}
+
+function deps(over: Partial<ServeDeps> = {}): ServeDeps & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    async fetchText(url: string) {
+      calls.push(url);
+      return JSON.stringify([{ lat: 1, lng: 2, name: 'alpha' }]);
+    },
+    async readConfig() { return undefined; },
+    adapters: {},
+    ...over,
+  } as ServeDeps & { calls: string[] };
+}
+
+describe('serveDatasets', () => {
+  it('fetches an http dataset and returns a FeatureCollection', async () => {
+    const d = deps();
+    const r = await serveDatasets(manifest([{ key: 'default', source: httpSource('https://x/a'), layers: [] }]), ['default'], undefined, d);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.datasets.default.type).toBe('FeatureCollection');
+    expect(r.datasets.default.features).toHaveLength(1);
+    expect(r.datasets.default.features[0].properties).toEqual({ n: 'alpha' });
+  });
+
+  it('expands date tokens in the url before fetching', async () => {
+    const d = deps();
+    await serveDatasets(
+      manifest([{ key: 'default', source: httpSource('https://x/a?since={today-1d}'), layers: [] }]),
+      ['default'], undefined, { ...d, now: new Date('2026-09-09T00:00:00Z') } as ServeDeps,
+    );
+    expect(d.calls[0]).toBe('https://x/a?since=2026-09-08');
+  });
+
+  it('returns 428 and the missing keys when a credential is unset', async () => {
+    const d = deps();
+    const r = await serveDatasets(
+      manifest([{ key: 'default', source: httpSource('https://x/a', { headers: { Authorization: 'Bearer {config.ACLED_KEY}' } }), layers: [] }]),
+      ['default'], undefined, d,
+    );
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.status).toBe(428);
+    expect(r.needsConfig).toEqual(['ACLED_KEY']);
+    expect(d.calls).toEqual([]);
+  });
+
+  it('substitutes a resolved credential into headers', async () => {
+    const seen: Record<string, string>[] = [];
+    const d = deps({
+      async readConfig(key: string) { return key === 'ACLED_KEY' ? 'secret' : undefined; },
+      async fetchText(_u: string, headers: Record<string, string>) { seen.push(headers); return '[]'; },
+    });
+    await serveDatasets(
+      manifest([{ key: 'default', source: httpSource('https://x/a', { headers: { Authorization: 'Bearer {config.ACLED_KEY}' } }), layers: [] }]),
+      ['default'], undefined, d,
+    );
+    expect(seen[0].Authorization).toBe('Bearer secret');
+  });
+
+  it('dispatches to a named adapter and passes params and bbox', async () => {
+    let got: { params: unknown; bbox: unknown } | null = null;
+    const d = deps({
+      adapters: {
+        sondehub: async ctx => { got = { params: ctx.params, bbox: ctx.bbox }; return []; },
+      },
+    });
+    const src: SourceSpec = { kind: 'adapter', adapter: 'sondehub', params: { duration: '1d' }, refresh: { mode: 'once' } };
+    const bbox = { west: 0, south: 0, east: 1, north: 1 };
+    const r = await serveDatasets(manifest([{ key: 'default', source: src, layers: [] }]), ['default'], bbox, d);
+    expect(r.ok).toBe(true);
+    expect(got).toEqual({ params: { duration: '1d' }, bbox });
+  });
+
+  it('returns 500 naming an adapter that is not registered', async () => {
+    const src: SourceSpec = { kind: 'adapter', adapter: 'nope', refresh: { mode: 'once' } };
+    const r = await serveDatasets(manifest([{ key: 'default', source: src, layers: [] }]), ['default'], undefined, deps());
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.status).toBe(500);
+    expect(r.error).toContain('nope');
+  });
+
+  it('returns 404 for a dataset key the manifest does not define', async () => {
+    const r = await serveDatasets(manifest([{ key: 'default', source: httpSource('https://x/a'), layers: [] }]), ['ghost'], undefined, deps());
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.status).toBe(404);
+  });
+
+  it('serves several datasets in one call', async () => {
+    const d = deps({
+      async fetchText() { return JSON.stringify({ a: [{ lat: 1, lng: 2, name: 'A' }], b: [{ lat: 3, lng: 4, name: 'B' }] }); },
+    });
+    const m = manifest([
+      { key: 'a', source: httpSource('https://x/shared', { arrayPath: 'a' }), layers: [] },
+      { key: 'b', source: httpSource('https://x/shared', { arrayPath: 'b' }), layers: [] },
+    ]);
+    const r = await serveDatasets(m, ['a', 'b'], undefined, d);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.datasets.a.features[0].properties).toEqual({ n: 'A' });
+    expect(r.datasets.b.features[0].properties).toEqual({ n: 'B' });
+  });
+
+  it('returns 502 when the upstream throws', async () => {
+    const d = deps({ async fetchText() { throw new Error('upstream exploded'); } });
+    const r = await serveDatasets(manifest([{ key: 'default', source: httpSource('https://x/a'), layers: [] }]), ['default'], undefined, d);
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.status).toBe(502);
+  });
+
+  it('refuses to serve computed and none sources', async () => {
+    const computed = manifest([{ key: 'default', source: { kind: 'computed', compute: 'solar-terminator' }, layers: [] }]);
+    const r = await serveDatasets(computed, ['default'], undefined, deps());
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.status).toBe(400);
+  });
+});
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `npx vitest run src/lib/layers/serve.test.ts`
+Expected: FAIL — cannot resolve `./serve`.
+
+- [ ] **Step 4: Write `src/lib/layers/serve.ts`**
+
+```ts
+import type { GeoFeature, NormalisedManifest, SourceSpec } from './types';
+import { extractRows, rowsToFeatures } from './http-source';
+import { substitute } from './substitute';
+import type { Bbox, SourceAdapter } from './adapters';
+
+export interface ServeDeps {
+  /** Fetches an upstream URL. The route supplies safeFetch wrapped in cachedSource. */
+  fetchText(url: string, headers: Record<string, string>, ttlMs: number): Promise<string>;
+  readConfig(key: string): Promise<string | undefined>;
+  adapters: Record<string, SourceAdapter>;
+  now?: Date;
+}
+
+export type FeatureCollection = { type: 'FeatureCollection'; features: GeoFeature[] };
+
+export type ServeResult =
+  | { ok: true; datasets: Record<string, FeatureCollection> }
+  | { ok: false; status: number; error: string; needsConfig?: string[] };
+
+const DEFAULT_TTL_MS = 15 * 60 * 1000;
+
+/**
+ * Resolve one manifest's requested datasets into FeatureCollections.
+ *
+ * All I/O is injected so this is unit-testable. The route wires in safeFetch
+ * (which re-validates every redirect hop against reserved ranges) wrapped in
+ * cachedSource -- and because that cache is keyed by the *resolved* URL, two
+ * datasets sharing a URL cost exactly one upstream request.
+ */
+export async function serveDatasets(
+  manifest: NormalisedManifest,
+  datasetKeys: string[],
+  bbox: Bbox | undefined,
+  deps: ServeDeps,
+): Promise<ServeResult> {
+  const out: Record<string, FeatureCollection> = {};
+
+  for (const key of datasetKeys) {
+    const dataset = manifest.datasets.find(d => d.key === key);
+    if (!dataset) {
+      return { ok: false, status: 404, error: `${manifest.id}: no dataset '${key}'` };
+    }
+
+    const source: SourceSpec = dataset.source;
+
+    if (source.kind === 'computed' || source.kind === 'none') {
+      return { ok: false, status: 400, error: `${manifest.id}/${key}: source kind '${source.kind}' is rendered client-side and is not served` };
+    }
+
+    if (source.kind === 'adapter') {
+      const adapter = deps.adapters[source.adapter];
+      if (!adapter) {
+        return { ok: false, status: 500, error: `${manifest.id}/${key}: no adapter registered named '${source.adapter}'` };
+      }
+      try {
+        const features = await adapter({
+          params: source.params ?? {},
+          bbox,
+          config: deps.readConfig,
+        });
+        out[key] = { type: 'FeatureCollection', features };
+      } catch (e) {
+        return { ok: false, status: 502, error: `${manifest.id}/${key}: adapter failed — ${e instanceof Error ? e.message : String(e)}` };
+      }
+      continue;
+    }
+
+    // ── http ──
+    const resolved = new Map<string, string | undefined>();
+    const resolveKey = (k: string) => {
+      if (!resolved.has(k)) throw new Error(`unresolved ${k}`);
+      return resolved.get(k);
+    };
+
+    // Collect every {config.X} referenced by the url and headers, resolve them
+    // up front, and refuse before making a request if any is unset.
+    const templates = [source.url, ...Object.values(source.headers ?? {})];
+    const missing = new Set<string>();
+    for (const t of templates) {
+      for (const k of substitute(t, () => undefined, deps.now).missing) {
+        const value = await deps.readConfig(k);
+        resolved.set(k, value);
+        if (!value) missing.add(k);
+      }
+    }
+    if (missing.size > 0) {
+      return {
+        ok: false, status: 428,
+        error: `${manifest.id}: missing configuration`,
+        needsConfig: [...missing],
+      };
+    }
+
+    const url = substitute(source.url, resolveKey, deps.now).text;
+    const headers: Record<string, string> = {};
+    for (const [name, template] of Object.entries(source.headers ?? {})) {
+      headers[name] = substitute(template, resolveKey, deps.now).text;
+    }
+
+    const withBbox = bbox
+      ? url.replace('{bbox}', `${bbox.west},${bbox.south},${bbox.east},${bbox.north}`)
+      : url;
+
+    try {
+      const text = await deps.fetchText(withBbox, headers, source.cacheTtlMs ?? DEFAULT_TTL_MS);
+      const rows = extractRows(source.format, text, source.arrayPath);
+      out[key] = {
+        type: 'FeatureCollection',
+        features: rowsToFeatures(rows, {
+          lat: source.lat, lng: source.lng, properties: source.properties,
+          passthroughGeometry: source.format === 'geojson',
+        }),
+      };
+    } catch (e) {
+      return { ok: false, status: 502, error: `${manifest.id}/${key}: upstream failed — ${e instanceof Error ? e.message : String(e)}` };
+    }
+  }
+
+  return { ok: true, datasets: out };
+}
+```
+
+- [ ] **Step 5: Run it to verify it passes**
+
+Run: `npx vitest run src/lib/layers/serve.test.ts`
+Expected: PASS, 10 tests.
+
+- [ ] **Step 6: Run the whole suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add src/lib/layers/adapters/index.ts src/lib/layers/serve.ts src/lib/layers/serve.test.ts
+git commit -m "feat(layers): adapter contract and dataset serving
+
+All I/O is injected so the resolution logic is testable; the route wires
+in safeFetch wrapped in cachedSource. Because that cache keys on the
+resolved URL, datasets sharing a URL collapse to one upstream request --
+flights' four arrayPaths, cloudflare's two -- while balloons' two
+distinct SondeHub endpoints correctly stay two.
+
+Unset credentials return 428 with the missing keys before any request is
+made, so the UI can say a key is needed instead of surfacing a confusing
+upstream 401."
+```
