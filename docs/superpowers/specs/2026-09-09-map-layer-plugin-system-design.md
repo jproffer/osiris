@@ -139,7 +139,7 @@ interface LayerManifest {
   layers?: MapLayerSpec[];
   datasets?: DatasetSpec[];
 
-  variants?: VariantSpec[]; // several panel toggles over one fetch
+  variants?: VariantSpec[]; // several panel toggles over this manifest's datasets (§6)
   render?: RenderSpec;      // defaults to { kind: 'geojson' }
   interaction?: InteractionSpec;
 }
