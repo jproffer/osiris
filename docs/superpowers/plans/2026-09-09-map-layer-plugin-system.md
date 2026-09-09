@@ -1106,11 +1106,11 @@ only ever sees one shape."
 ```ts
 import { describe, it, expect } from 'vitest';
 import { createLoadState, planLoads, markStarted, markSettled } from './loader';
-import type { NormalisedManifest, SourceSpec } from './types';
+import type { NormalisedManifest, RefreshSpec, SourceSpec } from './types';
 
-const httpSource = (mode: SourceSpec extends { refresh: infer R } ? R : never = { mode: 'once' } as never): SourceSpec => ({
+const httpSource = (refresh: RefreshSpec = { mode: 'once' }): SourceSpec => ({
   kind: 'http', url: 'https://example.org/x', format: 'json',
-  lat: 'lat', lng: 'lng', properties: {}, refresh: mode as never,
+  lat: 'lat', lng: 'lng', properties: {}, refresh,
 });
 
 function manifest(over: Partial<NormalisedManifest> = {}): NormalisedManifest {
@@ -1162,7 +1162,7 @@ describe('planLoads', () => {
   });
 
   it('does not poll before the interval has elapsed', () => {
-    const m = manifest({ datasets: [{ key: 'default', source: httpSource({ mode: 'poll', intervalMs: 1000 } as never), layers: [] }] });
+    const m = manifest({ datasets: [{ key: 'default', source: httpSource({ mode: 'poll', intervalMs: 1000 }), layers: [] }] });
     const state = createLoadState();
     const [plan] = planLoads([m], new Set(['radiation']), state, null, 0);
     markStarted(state, plan);
@@ -1171,7 +1171,7 @@ describe('planLoads', () => {
   });
 
   it('polls once the interval has elapsed', () => {
-    const m = manifest({ datasets: [{ key: 'default', source: httpSource({ mode: 'poll', intervalMs: 1000 } as never), layers: [] }] });
+    const m = manifest({ datasets: [{ key: 'default', source: httpSource({ mode: 'poll', intervalMs: 1000 }), layers: [] }] });
     const state = createLoadState();
     const [plan] = planLoads([m], new Set(['radiation']), state, null, 0);
     markStarted(state, plan);
@@ -1182,7 +1182,7 @@ describe('planLoads', () => {
   });
 
   it('replans a viewport layer when the bounds change', () => {
-    const m = manifest({ datasets: [{ key: 'default', source: httpSource({ mode: 'viewport', debounceMs: 800, mergeKey: 'id' } as never), layers: [] }] });
+    const m = manifest({ datasets: [{ key: 'default', source: httpSource({ mode: 'viewport', debounceMs: 800, mergeKey: 'id' }), layers: [] }] });
     const state = createLoadState();
     const vp1 = { west: 0, south: 0, east: 1, north: 1 };
     const [plan] = planLoads([m], new Set(['radiation']), state, vp1, 0);
@@ -1230,7 +1230,7 @@ describe('planLoads', () => {
   it('never plans computed, none or stream sources', () => {
     const computed = manifest({ id: 'day_night', datasets: [{ key: 'default', source: { kind: 'computed', compute: 'solar-terminator' }, layers: [] }] });
     const none = manifest({ id: 'terrain_3d', datasets: [{ key: 'default', source: { kind: 'none' }, layers: [] }] });
-    const stream = manifest({ id: 'malware', datasets: [{ key: 'default', source: httpSource({ mode: 'stream', path: '/api/malware/stream' } as never), layers: [] }] });
+    const stream = manifest({ id: 'malware', datasets: [{ key: 'default', source: httpSource({ mode: 'stream', path: '/api/malware/stream' }), layers: [] }] });
     expect(planLoads([computed], new Set(['day_night']), createLoadState(), null, 0)).toEqual([]);
     expect(planLoads([none], new Set(['terrain_3d']), createLoadState(), null, 0)).toEqual([]);
     expect(planLoads([stream], new Set(['malware']), createLoadState(), null, 0)).toEqual([]);
@@ -2535,3 +2535,1258 @@ Unset credentials return 428 with the missing keys before any request is
 made, so the UI can say a key is needed instead of surfacing a confusing
 upstream 401."
 ```
+
+---
+
+### Task 11: The two API routes and the container wiring
+
+**Files:**
+- Create: `src/app/api/layer-source/route.ts`
+- Create: `src/app/api/layer-config/route.ts`
+- Modify: `docker-compose.yml` (the `osiris` service — add `volumes:` and two env vars)
+- Modify: `.gitignore`
+- Create: `layers/.gitkeep`
+- Create: `config/.gitkeep`
+
+**Interfaces:**
+- Consumes: `loadRegistry`/`reloadRegistry` from `@/lib/layers/registry`; `serveDatasets` from `@/lib/layers/serve`; `ADAPTERS` from `@/lib/layers/adapters`; `readConfigValue`/`writeConfigValue`/`deleteConfigValue`/`configStatus` from `@/lib/layers/config-store`; `safeFetch`/`getClientIp`/`isRateLimited` from `@/lib/ssrf-guard`; `cachedSource` from `@/lib/sourceCache`.
+- Produces: HTTP endpoints only. No module exports other tasks import.
+
+**Context.** These routes are deliberately thin — all the logic they need is already tested in Tasks 8–10, because `npm test` cannot reach `src/app/api/**`. Verification here is by `curl`, not by unit test.
+
+**Why the array-of-one wrapper around `cachedSource`:** `cachedSource<T>` caches `T[]` because it was written for camera indexes. Wrapping a response body as `[text]` reuses its TTL, in-flight dedup and stale-on-error behaviour rather than writing a second cache — and the in-flight dedup is exactly what collapses a manifest's shared-URL datasets into one upstream request.
+
+- [ ] **Step 1: Write `src/app/api/layer-source/route.ts`**
+
+```ts
+import { NextRequest, NextResponse } from 'next/server';
+import { loadRegistry, reloadRegistry } from '@/lib/layers/registry';
+import { serveDatasets } from '@/lib/layers/serve';
+import { ADAPTERS } from '@/lib/layers/adapters';
+import { readConfigValue } from '@/lib/layers/config-store';
+import { safeFetch, getClientIp, isRateLimited } from '@/lib/ssrf-guard';
+import { cachedSource } from '@/lib/sourceCache';
+
+/**
+ * The browser never sends an upstream URL -- it sends a layer id, and this
+ * route resolves id -> manifest -> URL. That is what stops an unauthenticated
+ * instance being usable as an open fetch proxy: the reachable host set is
+ * exactly what the operator installed.
+ */
+
+/**
+ * cachedSource caches arrays (it was written for camera indexes), so a
+ * response body rides as [text]. That buys TTL, in-flight dedup and
+ * stale-on-error for free -- and the dedup is what makes two datasets
+ * sharing a URL cost one upstream request.
+ */
+const fetchers = new Map<string, () => Promise<string[]>>();
+
+function textFetcher(url: string, headers: Record<string, string>, ttlMs: number) {
+  const key = `layer-source:${url}|${JSON.stringify(headers)}`;
+  let fetcher = fetchers.get(key);
+  if (!fetcher) {
+    fetcher = cachedSource<string>(key, async () => {
+      const res = await safeFetch(url, { headers, signal: AbortSignal.timeout(20000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return [await res.text()];
+    }, ttlMs);
+    fetchers.set(key, fetcher);
+  }
+  return fetcher;
+}
+
+export async function GET(request: NextRequest) {
+  const ip = getClientIp(request);
+  if (isRateLimited(ip, 120, 60_000)) {
+    return NextResponse.json({ error: 'rate limited' }, { status: 429 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const layerId = searchParams.get('layer');
+  if (!layerId) return NextResponse.json({ error: "missing 'layer'" }, { status: 400 });
+
+  const registry = await loadRegistry();
+  const manifest = registry.manifests.find(m => m.id === layerId);
+  if (!manifest) return NextResponse.json({ error: `unknown layer '${layerId}'` }, { status: 404 });
+
+  const requested = (searchParams.get('datasets') ?? '').split(',').map(s => s.trim()).filter(Boolean);
+  const datasetKeys = requested.length > 0 ? requested : manifest.datasets.map(d => d.key);
+
+  const bboxRaw = searchParams.get('bbox');
+  let bbox: { west: number; south: number; east: number; north: number } | undefined;
+  if (bboxRaw) {
+    const parts = bboxRaw.split(',').map(Number);
+    if (parts.length === 4 && parts.every(Number.isFinite)) {
+      bbox = { west: parts[0], south: parts[1], east: parts[2], north: parts[3] };
+    }
+  }
+
+  const result = await serveDatasets(manifest, datasetKeys, bbox, {
+    fetchText: async (url, headers, ttlMs) => (await textFetcher(url, headers, ttlMs)())[0],
+    readConfig: readConfigValue,
+    adapters: ADAPTERS,
+  });
+
+  if (!result.ok) {
+    return NextResponse.json(
+      { error: result.error, ...(result.needsConfig ? { needsConfig: result.needsConfig } : {}) },
+      { status: result.status },
+    );
+  }
+
+  return NextResponse.json({ datasets: result.datasets }, {
+    headers: { 'Cache-Control': 'no-store' },
+  });
+}
+
+/** Re-scan the manifest directories, so a dropped-in layer needs no restart. */
+export async function POST(request: NextRequest) {
+  const { searchParams } = new URL(request.url);
+  if (searchParams.get('reload') !== '1') {
+    return NextResponse.json({ error: 'unsupported' }, { status: 400 });
+  }
+  const admin = process.env.OSIRIS_ADMIN_TOKEN;
+  if (admin && request.headers.get('x-osiris-admin') !== admin) {
+    return NextResponse.json({ error: 'unauthorised' }, { status: 401 });
+  }
+  const registry = await reloadRegistry();
+  fetchers.clear();
+  return NextResponse.json({
+    layers: registry.manifests.map(m => m.id),
+    errors: registry.errors,
+    loadedAt: registry.loadedAt,
+  });
+}
+```
+
+- [ ] **Step 2: Write `src/app/api/layer-config/route.ts`**
+
+```ts
+import { NextRequest, NextResponse } from 'next/server';
+import { loadRegistry } from '@/lib/layers/registry';
+import { serveDatasets } from '@/lib/layers/serve';
+import { ADAPTERS } from '@/lib/layers/adapters';
+import {
+  configStatus, readConfigValue, writeConfigValue, deleteConfigValue,
+} from '@/lib/layers/config-store';
+import { safeFetch, getClientIp, isRateLimited } from '@/lib/ssrf-guard';
+
+/**
+ * Credential status, writes and deletes.
+ *
+ * Asymmetric on purpose: there is no path here that returns a stored value,
+ * masked or otherwise. A visitor on an unauthenticated instance therefore
+ * cannot exfiltrate the operator's key -- the genuine risk -- though they can
+ * overwrite one, which breaks a layer until it is re-entered. Set
+ * OSIRIS_ADMIN_TOKEN to close that on an internet-exposed instance.
+ */
+
+function unauthorised(request: NextRequest): boolean {
+  const admin = process.env.OSIRIS_ADMIN_TOKEN;
+  return !!admin && request.headers.get('x-osiris-admin') !== admin;
+}
+
+async function declaredKeys(): Promise<{ key: string; layerId: string }[]> {
+  const registry = await loadRegistry();
+  return registry.manifests.flatMap(m => m.requiredConfig.map(c => ({ key: c.key, layerId: m.id })));
+}
+
+export async function GET() {
+  const registry = await loadRegistry();
+  const out: Record<string, Record<string, { configured: boolean; source: 'env' | 'store' | null }>> = {};
+  for (const m of registry.manifests) {
+    if (m.requiredConfig.length === 0) continue;
+    out[m.id] = await configStatus(m.requiredConfig.map(c => c.key));
+  }
+  return NextResponse.json({ layers: out }, { headers: { 'Cache-Control': 'no-store' } });
+}
+
+export async function POST(request: NextRequest) {
+  if (unauthorised(request)) return NextResponse.json({ error: 'unauthorised' }, { status: 401 });
+  if (isRateLimited(getClientIp(request), 10, 60_000)) {
+    return NextResponse.json({ error: 'rate limited' }, { status: 429 });
+  }
+
+  let body: { key?: string; value?: string };
+  try { body = await request.json(); } catch { return NextResponse.json({ error: 'invalid body' }, { status: 400 }); }
+  const { key, value } = body;
+  if (!key || typeof value !== 'string' || !value) {
+    return NextResponse.json({ error: "need 'key' and a non-empty 'value'" }, { status: 400 });
+  }
+
+  const declared = await declaredKeys();
+  const owner = declared.find(d => d.key === key);
+  if (!owner) return NextResponse.json({ error: `no layer declares '${key}'` }, { status: 404 });
+
+  if (process.env[key]) {
+    return NextResponse.json(
+      { error: `${key} is set by the environment and cannot be changed here`, source: 'env' },
+      { status: 409 },
+    );
+  }
+
+  await writeConfigValue(key, value);
+
+  // Probe once so a mistyped token fails visibly now, rather than silently
+  // producing an empty layer an hour later.
+  const registry = await loadRegistry();
+  const manifest = registry.manifests.find(m => m.id === owner.layerId)!;
+  const probe = await serveDatasets(manifest, [manifest.datasets[0].key], undefined, {
+    fetchText: async (url, headers) => {
+      const res = await safeFetch(url, { headers, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
+    },
+    readConfig: readConfigValue,
+    adapters: ADAPTERS,
+  });
+
+  return NextResponse.json({
+    stored: true,
+    verified: probe.ok,
+    ...(probe.ok ? {} : { error: probe.error }),
+  });
+}
+
+export async function DELETE(request: NextRequest) {
+  if (unauthorised(request)) return NextResponse.json({ error: 'unauthorised' }, { status: 401 });
+  const key = new URL(request.url).searchParams.get('key');
+  if (!key) return NextResponse.json({ error: "missing 'key'" }, { status: 400 });
+  await deleteConfigValue(key);
+  return NextResponse.json({ deleted: true });
+}
+```
+
+- [ ] **Step 3: Add the volume mounts to `docker-compose.yml`**
+
+In the `osiris` service, after the `environment:` block's existing entries, add the two directory variables and a `volumes:` block. The service currently has no `volumes:` key, so add one:
+
+```yaml
+      - UV_THREADPOOL_SIZE=32
+      # Where drop-in layer manifests and runtime credentials live.
+      - OSIRIS_LAYERS_DIR=/app/layers
+      - OSIRIS_CONFIG_DIR=/app/config
+    volumes:
+      # Operator drop-in manifests. Read-only: the app never writes manifests.
+      - ./layers:/app/layers:ro
+      # Runtime credential store. Writable, and never committed.
+      - ./config:/app/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+```
+
+- [ ] **Step 4: Keep the directories in git but their contents out**
+
+```bash
+mkdir -p layers config
+touch layers/.gitkeep config/.gitkeep
+```
+
+Append to `.gitignore`:
+
+```gitignore
+
+# Operator drop-in layer manifests and the runtime credential store.
+# The directories are tracked (via .gitkeep) so the compose mounts resolve;
+# their contents are local to an install and secrets must never be committed.
+/layers/*
+!/layers/.gitkeep
+/config/*
+!/config/.gitkeep
+```
+
+- [ ] **Step 5: Verify the build and the reload endpoint**
+
+Run: `npm run build`
+Expected: build succeeds, both routes compile.
+
+Run in one terminal: `npm run dev`
+Then:
+
+```bash
+curl -s -X POST 'http://localhost:3000/api/layer-source?reload=1' | head -c 400
+```
+
+Expected: JSON with `"layers":[]` and `"errors":[]` — no manifests exist yet, which is correct at this stage. The important part is that it returns 200 rather than throwing.
+
+```bash
+curl -s 'http://localhost:3000/api/layer-source?layer=nope'
+```
+
+Expected: `{"error":"unknown layer 'nope'"}` with status 404.
+
+```bash
+curl -s 'http://localhost:3000/api/layer-config'
+```
+
+Expected: `{"layers":{}}`.
+
+- [ ] **Step 6: Verify no credential value can be read back**
+
+```bash
+curl -s 'http://localhost:3000/api/layer-config' | grep -i secret || echo "no values exposed — correct"
+```
+
+Expected: `no values exposed — correct`.
+
+- [ ] **Step 7: Run the whole suite and lint**
+
+Run: `npm test && npm run lint`
+Expected: both pass.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/app/api/layer-source/route.ts src/app/api/layer-config/route.ts \
+        docker-compose.yml .gitignore layers/.gitkeep config/.gitkeep
+git commit -m "feat(layers): layer-source and layer-config endpoints
+
+The browser sends a layer id, never a URL -- the route resolves id to
+manifest to URL, so an unauthenticated instance cannot be driven as an
+open fetch proxy. Response bodies ride through cachedSource, whose
+in-flight dedup collapses a manifest's shared-URL datasets into one
+upstream request.
+
+layer-config has no path that returns a stored value, so a visitor cannot
+exfiltrate the operator's key; OSIRIS_ADMIN_TOKEN closes the write side
+for exposed instances and is unset by default. A write probes the
+upstream once so a mistyped token fails at entry."
+```
+
+---
+
+### Task 12: MapLike, the test fake, and the engine core
+
+**Files:**
+- Create: `src/lib/layers/maplike.ts`
+- Create: `src/lib/layers/engine.ts`
+- Test: `src/lib/layers/engine.test.ts`
+- Modify: `src/lib/layers/types.ts` (replace `VariantSpec.filter`'s type)
+
+**Interfaces:**
+- Consumes: `NormalisedManifest`, `sourceId`, `mapLayerId` from `./types`.
+- Produces:
+  - `interface MapLike` and `class FakeMap implements MapLike` from `./maplike`
+  - `class LayerEngine` with `mount`, `setActive`, `setData`, `setPalette`, `clickableLayerIds`, `destroy`
+  - `interface EngineOptions { onSelect(sel: Selection): void; palette: Record<string, string>; beforeId?: string }`
+  - `interface Selection { layerId: string; properties: Record<string, unknown>; lngLat: [number, number] }`
+
+**Deviation from the spec, deliberate.** The spec types `VariantSpec.filter` as `unknown[]` and calls it "a MapLibre-style predicate". But §6 also establishes that variant filters are applied **row-level, before features are built** — a custom renderer like `satellites` never sees a MapLibre filter. Since nothing evaluates these as MapLibre expressions, shipping an expression interpreter would be building a parser we never need. This task narrows the type to:
+
+```ts
+export interface VariantFilter { property: string; equals?: unknown; in?: unknown[] }
+```
+
+which covers `satellites`' six category toggles exactly, the only variant filters in the migration inventory. **Amend §3 of the spec to match** when this task lands. If a later layer genuinely needs boolean composition, widening this is additive.
+
+**Layers are mounted once, hidden, and never removed.** `setActive` only flips `visibility`. This mirrors what `OsirisMap` does today with its pre-allocated `sources` array and matches MapLibre's cost model — adding and removing layers on toggle is far more expensive than toggling visibility.
+
+- [ ] **Step 1: Narrow the filter type in `src/lib/layers/types.ts`**
+
+Replace the `VariantSpec` interface:
+
+```ts
+export interface VariantFilter { property: string; equals?: unknown; in?: unknown[] }
+
+export interface VariantSpec {
+  id: string;
+  label: string;
+  dataset?: string;
+  filter?: VariantFilter;
+  defaultOn?: boolean;
+}
+```
+
+- [ ] **Step 2: Write `src/lib/layers/maplike.ts`**
+
+```ts
+/**
+ * The narrow slice of MapLibre the engine uses.
+ *
+ * This exists so the engine can be unit-tested: vitest runs in a node
+ * environment with no WebGL and no DOM, so a real maplibregl.Map cannot be
+ * constructed. FakeMap records what the engine did, which is what the tests
+ * assert against.
+ */
+export interface MapLike {
+  addSource(id: string, spec: unknown): void;
+  getSource(id: string): { setData(data: unknown): void } | undefined;
+  addLayer(spec: Record<string, unknown>, beforeId?: string): void;
+  getLayer(id: string): unknown | undefined;
+  setLayoutProperty(id: string, name: string, value: unknown): void;
+  setPaintProperty(id: string, name: string, value: unknown): void;
+  queryRenderedFeatures(point: { x: number; y: number }): Array<{
+    layer?: { id?: string };
+    properties?: Record<string, unknown>;
+  }>;
+  on(type: string, handler: (e: unknown) => void): void;
+  off(type: string, handler: (e: unknown) => void): void;
+  getCanvas(): { style: { cursor: string } };
+}
+
+export class FakeMap implements MapLike {
+  sources = new Map<string, { data: unknown }>();
+  layers = new Map<string, Record<string, unknown>>();
+  layerOrder: string[] = [];
+  handlers = new Map<string, Array<(e: unknown) => void>>();
+  canvas = { style: { cursor: '' } };
+  /** Features the next queryRenderedFeatures call should return, topmost first. */
+  hits: Array<{ layer?: { id?: string }; properties?: Record<string, unknown> }> = [];
+
+  addSource(id: string, spec: unknown): void {
+    this.sources.set(id, { data: (spec as { data?: unknown })?.data });
+  }
+  getSource(id: string) {
+    const entry = this.sources.get(id);
+    if (!entry) return undefined;
+    return { setData: (data: unknown) => { entry.data = data; } };
+  }
+  addLayer(spec: Record<string, unknown>, beforeId?: string): void {
+    const id = String(spec.id);
+    this.layers.set(id, spec);
+    if (beforeId && this.layerOrder.includes(beforeId)) {
+      this.layerOrder.splice(this.layerOrder.indexOf(beforeId), 0, id);
+    } else {
+      this.layerOrder.push(id);
+    }
+  }
+  getLayer(id: string) { return this.layers.get(id); }
+  setLayoutProperty(id: string, name: string, value: unknown): void {
+    const layer = this.layers.get(id);
+    if (!layer) return;
+    layer.layout = { ...(layer.layout as object), [name]: value };
+  }
+  setPaintProperty(id: string, name: string, value: unknown): void {
+    const layer = this.layers.get(id);
+    if (!layer) return;
+    layer.paint = { ...(layer.paint as object), [name]: value };
+  }
+  queryRenderedFeatures() { return this.hits; }
+  on(type: string, handler: (e: unknown) => void): void {
+    const list = this.handlers.get(type) ?? [];
+    list.push(handler);
+    this.handlers.set(type, list);
+  }
+  off(type: string, handler: (e: unknown) => void): void {
+    const list = this.handlers.get(type) ?? [];
+    this.handlers.set(type, list.filter(h => h !== handler));
+  }
+  getCanvas() { return this.canvas; }
+
+  /** Test helper: dispatch an event as MapLibre would. */
+  emit(type: string, event: unknown): void {
+    for (const handler of [...(this.handlers.get(type) ?? [])]) handler(event);
+  }
+  visibilityOf(layerId: string): unknown {
+    return (this.layers.get(layerId)?.layout as Record<string, unknown> | undefined)?.visibility;
+  }
+  featuresIn(sourceId: string): unknown[] {
+    return ((this.sources.get(sourceId)?.data as { features?: unknown[] })?.features) ?? [];
+  }
+}
+```
+
+- [ ] **Step 3: Write the failing test — `src/lib/layers/engine.test.ts`**
+
+```ts
+import { describe, it, expect } from 'vitest';
+import { FakeMap } from './maplike';
+import { LayerEngine } from './engine';
+import type { NormalisedManifest } from './types';
+
+function manifest(over: Partial<NormalisedManifest> = {}): NormalisedManifest {
+  return {
+    id: 'radiation', label: 'R', group: 'HAZARD', defaultOn: false,
+    countFrom: 'default', requiredConfig: [], variants: [],
+    render: { kind: 'geojson' },
+    datasets: [{
+      key: 'default',
+      source: { kind: 'http', url: 'https://x/a', format: 'json', lat: 'lat', lng: 'lng', properties: {}, refresh: { mode: 'once' } },
+      layers: [
+        { suffix: 'glow', type: 'circle', paint: { 'circle-color': '#7E57C2' } },
+        { suffix: 'dots', type: 'circle', clickable: true, paint: { 'circle-color': '{palette.cctv}' } },
+      ],
+    }],
+    ...over,
+  };
+}
+
+const engineOf = (map: FakeMap, palette: Record<string, string> = { cctv: '#00E5FF' }) =>
+  new LayerEngine(map, { onSelect: () => {}, palette });
+
+const feature = (props: Record<string, unknown>) => ({
+  type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: props,
+});
+
+describe('LayerEngine.mount', () => {
+  it('adds one source per dataset and one layer per spec', () => {
+    const map = new FakeMap();
+    engineOf(map).mount([manifest()]);
+    expect([...map.sources.keys()]).toEqual(['radiation']);
+    expect([...map.layers.keys()]).toEqual(['radiation--glow', 'radiation--dots']);
+  });
+
+  it('names sources and layers per the id rules for a non-default dataset', () => {
+    const map = new FakeMap();
+    const m = manifest({ id: 'maritime', datasets: [{ ...manifest().datasets[0], key: 'ships' }] });
+    engineOf(map).mount([m]);
+    expect([...map.sources.keys()]).toEqual(['maritime--ships']);
+    expect([...map.layers.keys()]).toEqual(['maritime--ships--glow', 'maritime--ships--dots']);
+  });
+
+  it('mounts every layer hidden', () => {
+    const map = new FakeMap();
+    engineOf(map).mount([manifest()]);
+    expect(map.visibilityOf('radiation--dots')).toBe('none');
+    expect(map.visibilityOf('radiation--glow')).toBe('none');
+  });
+
+  it('resolves palette tokens in paint', () => {
+    const map = new FakeMap();
+    engineOf(map).mount([manifest()]);
+    expect((map.layers.get('radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#00E5FF');
+  });
+
+  it('leaves non-token paint values alone', () => {
+    const map = new FakeMap();
+    engineOf(map).mount([manifest()]);
+    expect((map.layers.get('radiation--glow')!.paint as Record<string, unknown>)['circle-color']).toBe('#7E57C2');
+  });
+
+  it('does not mount custom or overlay render kinds as MapLibre layers', () => {
+    const map = new FakeMap();
+    engineOf(map).mount([
+      manifest({ id: 'satellites', render: { kind: 'custom', renderer: 'satellites' } }),
+      manifest({ id: 'cctv_previews', render: { kind: 'overlay', component: 'cctv-previews' } }),
+    ]);
+    expect(map.layers.size).toBe(0);
+  });
+
+  it('is idempotent — mounting twice does not duplicate layers', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest()]);
+    engine.mount([manifest()]);
+    expect(map.layers.size).toBe(2);
+  });
+});
+
+describe('LayerEngine.setActive', () => {
+  it('shows a layer when its id is active and hides it otherwise', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest()]);
+    engine.setActive(new Set(['radiation']));
+    expect(map.visibilityOf('radiation--dots')).toBe('visible');
+    engine.setActive(new Set());
+    expect(map.visibilityOf('radiation--dots')).toBe('none');
+  });
+
+  it('shows a layer when any of its variants is active', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest({ id: 'satellites', variants: [{ id: 'sat_comms', label: 'Comms', filter: { property: 'category', equals: 'comms' } }] })]);
+    engine.setActive(new Set(['sat_comms']));
+    expect(map.visibilityOf('satellites--dots')).toBe('visible');
+  });
+});
+
+describe('LayerEngine.setData', () => {
+  it('pushes features into the dataset source', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.setData('radiation', 'default', [feature({ n: 1 })]);
+    expect(map.featuresIn('radiation')).toHaveLength(1);
+  });
+
+  it('filters to the union of active variant filters', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest({
+      id: 'satellites',
+      variants: [
+        { id: 'sat_comms', label: 'Comms', filter: { property: 'category', equals: 'comms' } },
+        { id: 'sat_military', label: 'Mil', filter: { property: 'category', in: ['military'] } },
+      ],
+    })]);
+    const rows = [feature({ category: 'comms' }), feature({ category: 'military' }), feature({ category: 'science' })];
+
+    engine.setActive(new Set(['sat_comms']));
+    engine.setData('satellites', 'default', rows);
+    expect(map.featuresIn('satellites')).toHaveLength(1);
+
+    engine.setActive(new Set(['sat_comms', 'sat_military']));
+    expect(map.featuresIn('satellites')).toHaveLength(2);
+  });
+
+  it('shows every feature when the manifest id itself is active', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest({ id: 'satellites', variants: [{ id: 'sat_comms', label: 'C', filter: { property: 'category', equals: 'comms' } }] })]);
+    engine.setData('satellites', 'default', [feature({ category: 'comms' }), feature({ category: 'science' })]);
+    engine.setActive(new Set(['satellites']));
+    expect(map.featuresIn('satellites')).toHaveLength(2);
+  });
+
+  it('clears the source when the layer goes inactive', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.setData('radiation', 'default', [feature({ n: 1 })]);
+    engine.setActive(new Set());
+    expect(map.featuresIn('radiation')).toHaveLength(0);
+  });
+});
+
+describe('LayerEngine.clickableLayerIds', () => {
+  it('derives the clickable set from the manifests', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest()]);
+    expect(engine.clickableLayerIds()).toEqual(['radiation--dots']);
+  });
+});
+
+describe('LayerEngine.setPalette', () => {
+  it('re-applies paint when the palette changes', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([manifest()]);
+    engine.setPalette({ cctv: '#FF0000' });
+    expect((map.layers.get('radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#FF0000');
+  });
+});
+```
+
+- [ ] **Step 4: Run it to verify it fails**
+
+Run: `npx vitest run src/lib/layers/engine.test.ts`
+Expected: FAIL — cannot resolve `./engine`.
+
+- [ ] **Step 5: Write `src/lib/layers/engine.ts`**
+
+```ts
+import type { GeoFeature, MapLayerSpec, NormalisedManifest, VariantFilter } from './types';
+import { mapLayerId, sourceId } from './types';
+import type { MapLike } from './maplike';
+
+/**
+ * What a click resolved to. A discriminated union rather than a bare feature,
+ * because the three interaction kinds are handled by different owners: the
+ * host renders `popup` html into a MapLibre popup, opens a React panel for
+ * `panel`, and calls a named function for `adapter`.
+ */
+export type Selection =
+  | { kind: 'popup'; layerId: string; html: string; properties: Record<string, unknown>; lngLat: [number, number] }
+  | { kind: 'panel'; layerId: string; panel: string; properties: Record<string, unknown>; lngLat: [number, number] }
+  | { kind: 'adapter'; layerId: string; adapter: string; properties: Record<string, unknown>; lngLat: [number, number] };
+
+export interface EngineOptions {
+  onSelect(sel: Selection): void;
+  palette: Record<string, string>;
+  /** Manifest layers are inserted before this, so bespoke overlays stay on top. */
+  beforeId?: string;
+}
+
+const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] as GeoFeature[] };
+
+/** Expand {palette.key} tokens anywhere in a paint or layout value. */
+function resolveTokens(value: unknown, palette: Record<string, string>): unknown {
+  if (typeof value === 'string') {
+    return value.replace(/\{palette\.(\w+)\}/g, (whole, key: string) => palette[key] ?? whole);
+  }
+  if (Array.isArray(value)) return value.map(v => resolveTokens(v, palette));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value)) out[k] = resolveTokens(v, palette);
+    return out;
+  }
+  return value;
+}
+
+function matches(filter: VariantFilter, props: Record<string, unknown>): boolean {
+  const v = props[filter.property];
+  if (filter.in) return filter.in.includes(v);
+  if ('equals' in filter) return v === filter.equals;
+  return true;
+}
+
+export class LayerEngine {
+  private mounted = new Map<string, NormalisedManifest>();
+  private raw = new Map<string, GeoFeature[]>();
+  private active: ReadonlySet<string> = new Set();
+
+  constructor(private map: MapLike, private opts: EngineOptions) {}
+
+  /**
+   * Add every source and layer once, hidden. Toggling visibility later is far
+   * cheaper than adding and removing layers, and it is what OsirisMap already
+   * does with its pre-allocated source list.
+   */
+  mount(manifests: NormalisedManifest[]): void {
+    for (const m of manifests) {
+      if (this.mounted.has(m.id)) continue;
+      this.mounted.set(m.id, m);
+      // Custom renderers and DOM overlays are not MapLibre layers.
+      if (m.render.kind !== 'geojson') continue;
+
+      for (const dataset of m.datasets) {
+        const src = sourceId(m.id, dataset.key);
+        if (!this.map.getSource(src)) {
+          this.map.addSource(src, { type: 'geojson', data: EMPTY_FC });
+        }
+        for (const spec of dataset.layers) {
+          const id = mapLayerId(m.id, dataset.key, spec.suffix);
+          if (this.map.getLayer(id)) continue;
+          this.map.addLayer(this.layerSpec(id, src, spec), this.opts.beforeId);
+        }
+      }
+    }
+  }
+
+  private layerSpec(id: string, src: string, spec: MapLayerSpec): Record<string, unknown> {
+    const out: Record<string, unknown> = {
+      id, type: spec.type, source: src,
+      paint: resolveTokens(spec.paint ?? {}, this.opts.palette),
+      layout: { ...(resolveTokens(spec.layout ?? {}, this.opts.palette) as object), visibility: 'none' },
+    };
+    if (spec.filter) out.filter = spec.filter;
+    if (spec.minzoom !== undefined) out.minzoom = spec.minzoom;
+    if (spec.maxzoom !== undefined) out.maxzoom = spec.maxzoom;
+    return out;
+  }
+
+  private isActive(m: NormalisedManifest): boolean {
+    return this.active.has(m.id) || m.variants.some(v => this.active.has(v.id));
+  }
+
+  setActive(ids: ReadonlySet<string>): void {
+    this.active = new Set(ids);
+    for (const m of this.mounted.values()) {
+      const visible = this.isActive(m);
+      if (m.render.kind === 'geojson') {
+        for (const dataset of m.datasets) {
+          for (const spec of dataset.layers) {
+            const id = mapLayerId(m.id, dataset.key, spec.suffix);
+            if (this.map.getLayer(id)) {
+              this.map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+            }
+          }
+          this.apply(m, dataset.key);
+        }
+      }
+    }
+  }
+
+  setData(layerId: string, datasetKey: string, features: GeoFeature[]): void {
+    this.raw.set(`${layerId}:${datasetKey}`, features);
+    const m = this.mounted.get(layerId);
+    if (m) this.apply(m, datasetKey);
+  }
+
+  /**
+   * Push the currently-visible slice into the source.
+   *
+   * Variant filters are row-level, so the union of the active variants'
+   * filters decides what is drawn. The manifest's own id being active means
+   * "all", which is how the satellites toggle relates to its categories.
+   */
+  private apply(m: NormalisedManifest, datasetKey: string): void {
+    const src = sourceId(m.id, datasetKey);
+    if (!this.map.getSource(src)) return;
+
+    if (!this.isActive(m)) {
+      this.map.getSource(src)!.setData(EMPTY_FC);
+      return;
+    }
+
+    const rows = this.raw.get(`${m.id}:${datasetKey}`) ?? [];
+    const primary = m.datasets[0]?.key;
+    const filters = m.variants
+      .filter(v => this.active.has(v.id) && (v.dataset ?? primary) === datasetKey && v.filter)
+      .map(v => v.filter!);
+
+    const features = this.active.has(m.id) || filters.length === 0
+      ? rows
+      : rows.filter(f => filters.some(filter => matches(filter, f.properties ?? {})));
+
+    this.map.getSource(src)!.setData({ type: 'FeatureCollection', features });
+  }
+
+  setPalette(palette: Record<string, string>): void {
+    this.opts.palette = palette;
+    for (const m of this.mounted.values()) {
+      if (m.render.kind !== 'geojson') continue;
+      for (const dataset of m.datasets) {
+        for (const spec of dataset.layers) {
+          const id = mapLayerId(m.id, dataset.key, spec.suffix);
+          if (!this.map.getLayer(id)) continue;
+          for (const [name, value] of Object.entries(spec.paint ?? {})) {
+            this.map.setPaintProperty(id, name, resolveTokens(value, palette));
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * The clickable set, derived rather than authored. This is the structural
+   * fix for the CLICKABLE_LAYERS drift bug: there is no second list to
+   * disagree with the first.
+   */
+  clickableLayerIds(): string[] {
+    const out: string[] = [];
+    for (const m of this.mounted.values()) {
+      if (m.render.kind !== 'geojson') continue;
+      for (const dataset of m.datasets) {
+        for (const spec of dataset.layers) {
+          if (spec.clickable) out.push(mapLayerId(m.id, dataset.key, spec.suffix));
+        }
+      }
+    }
+    return out;
+  }
+
+  destroy(): void {
+    this.mounted.clear();
+    this.raw.clear();
+    this.active = new Set();
+  }
+}
+```
+
+- [ ] **Step 6: Run it to verify it passes**
+
+Run: `npx vitest run src/lib/layers/engine.test.ts`
+Expected: PASS, 16 tests.
+
+- [ ] **Step 7: Run the whole suite**
+
+Run: `npm test`
+Expected: PASS.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add src/lib/layers/maplike.ts src/lib/layers/engine.ts src/lib/layers/engine.test.ts src/lib/layers/types.ts
+git commit -m "feat(layers): the layer engine core, testable against a fake map
+
+MapLike is the narrow slice of MapLibre the engine touches, so the engine
+can be tested in vitest's node environment where no WebGL context exists.
+clickableLayerIds() derives the clickable set from the manifests, which is
+the structural fix for the CLICKABLE_LAYERS drift bug -- there is no
+second list left to disagree with the first.
+
+Narrows VariantSpec.filter from a MapLibre expression to {property,
+equals|in}. The spec already established these are row-level predicates
+that custom renderers never hand to MapLibre, so an expression
+interpreter would be a parser we never call."
+```
+
+---
+
+### Task 13: Click routing, hover cursor, and the custom-renderer hit-test seam
+
+**Files:**
+- Modify: `src/lib/layers/engine.ts` (add `attach`, `detach`, `registerHitTest`; extend `destroy`)
+- Modify: `src/lib/layers/engine.test.ts` (append the interaction suites)
+
+**Interfaces:**
+- Consumes: `renderPopup` from `./popup`; `Selection`, `MapLike` from Task 12.
+- Produces, added to `LayerEngine`:
+  - `attach(): void`
+  - `detach(): void`
+  - `registerHitTest(layerId: string, fn: (point: { x: number; y: number }) => Record<string, unknown> | null): void`
+
+**Context.** One `click` handler and one `mousemove` handler replace the 29 click handlers and the hand-maintained hover array in `OsirisMap.tsx`. Dispatch is by the topmost hit whose layer id is in the derived clickable set.
+
+**Custom renderers get a hit-test seam** because `queryRenderedFeatures` cannot see into a custom WebGL layer — that is precisely why satellites hand-rolled a GPU pick pass. A registered hit test runs **only when no ordinary layer was hit**, which reproduces today's intended "defer to any layer with its own handler" rule. The difference is that the layer ids it defers to are now derived and therefore correct, rather than the four phantom names that made the check a no-op.
+
+**Hover never fights another owner:** if the cursor is already set to something other than `pointer`, the engine leaves it alone. That behaviour is copied from the existing satellite hover code, which is careful about exactly this.
+
+- [ ] **Step 1: Append the failing tests to `src/lib/layers/engine.test.ts`**
+
+Add these imports at the top of the file (merge with the existing import line):
+
+```ts
+import type { Selection } from './engine';
+```
+
+Then append:
+
+```ts
+function popupManifest(): NormalisedManifest {
+  return {
+    ...manifest(),
+    interaction: {
+      kind: 'popup',
+      popup: { accent: '#7E57C2', title: { property: 'place' }, fields: [{ label: 'READING', property: 'value' }] },
+    },
+  };
+}
+
+function engineWithSelections(map: FakeMap) {
+  const seen: Selection[] = [];
+  const engine = new LayerEngine(map, { onSelect: s => seen.push(s), palette: {} });
+  return { engine, seen };
+}
+
+const clickEvent = { point: { x: 10, y: 20 }, lngLat: { lng: 5, lat: 6 } };
+
+describe('LayerEngine interaction', () => {
+  it('renders popup html for a click on a clickable layer', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima', value: '15' } }];
+    map.emit('click', clickEvent);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].kind).toBe('popup');
+    if (seen[0].kind !== 'popup') return;
+    expect(seen[0].layerId).toBe('radiation');
+    expect(seen[0].html).toContain('Fukushima');
+    expect(seen[0].lngLat).toEqual([5, 6]);
+  });
+
+  it('ignores a click that hits no clickable layer', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'basemap-water' }, properties: {} }];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+
+  it('ignores a click on a non-clickable layer of a mounted manifest', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'radiation--glow' }, properties: {} }];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+
+  it('takes the topmost hit when several clickable layers overlap', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest(), { ...popupManifest(), id: 'piracy' }]);
+    engine.setActive(new Set(['radiation', 'piracy']));
+    engine.attach();
+
+    map.hits = [
+      { layer: { id: 'piracy--dots' }, properties: { place: 'Gulf of Guinea' } },
+      { layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } },
+    ];
+    map.emit('click', clickEvent);
+    expect(seen[0].layerId).toBe('piracy');
+  });
+
+  it('emits a panel selection rather than html', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([{ ...manifest(), id: 'cctv', interaction: { kind: 'panel', panel: 'cctv' } }]);
+    engine.setActive(new Set(['cctv']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'cctv--dots' }, properties: { id: 'cam-1' } }];
+    map.emit('click', clickEvent);
+    expect(seen[0].kind).toBe('panel');
+    if (seen[0].kind !== 'panel') return;
+    expect(seen[0].panel).toBe('cctv');
+    expect(seen[0].properties).toEqual({ id: 'cam-1' });
+  });
+
+  it('emits an adapter selection by name', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([{ ...manifest(), id: 'flights', interaction: { kind: 'adapter', adapter: 'flights' } }]);
+    engine.setActive(new Set(['flights']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'flights--dots' }, properties: { callsign: 'BA117' } }];
+    map.emit('click', clickEvent);
+    expect(seen[0].kind).toBe('adapter');
+    if (seen[0].kind !== 'adapter') return;
+    expect(seen[0].adapter).toBe('flights');
+  });
+
+  it('falls through to a registered hit test only when no layer was hit', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest(), { ...manifest(), id: 'satellites', render: { kind: 'custom', renderer: 'satellites' }, interaction: { kind: 'adapter', adapter: 'satellites' } }]);
+    engine.setActive(new Set(['radiation', 'satellites']));
+    engine.registerHitTest('satellites', () => ({ name: 'ISS' }));
+    engine.attach();
+
+    // An ordinary layer wins.
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } }];
+    map.emit('click', clickEvent);
+    expect(seen[0].layerId).toBe('radiation');
+
+    // Nothing ordinary under the cursor: the custom renderer gets it.
+    map.hits = [];
+    map.emit('click', clickEvent);
+    expect(seen[1].layerId).toBe('satellites');
+    expect(seen[1].properties).toEqual({ name: 'ISS' });
+  });
+
+  it('does not consult a hit test for an inactive layer', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([{ ...manifest(), id: 'satellites', render: { kind: 'custom', renderer: 'satellites' }, interaction: { kind: 'adapter', adapter: 'satellites' } }]);
+    engine.registerHitTest('satellites', () => ({ name: 'ISS' }));
+    engine.setActive(new Set());
+    engine.attach();
+
+    map.hits = [];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+
+  it('sets a pointer cursor over a clickable layer and clears it after', () => {
+    const map = new FakeMap();
+    const { engine } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
+    map.emit('mousemove', clickEvent);
+    expect(map.canvas.style.cursor).toBe('pointer');
+
+    map.hits = [];
+    map.emit('mousemove', clickEvent);
+    expect(map.canvas.style.cursor).toBe('');
+  });
+
+  it('does not steal a cursor another owner has already claimed', () => {
+    const map = new FakeMap();
+    const { engine } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.canvas.style.cursor = 'crosshair';
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
+    map.emit('mousemove', clickEvent);
+    expect(map.canvas.style.cursor).toBe('crosshair');
+  });
+
+  it('stops responding after detach', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+    engine.detach();
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'X' } }];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+});
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `npx vitest run src/lib/layers/engine.test.ts`
+Expected: FAIL — `engine.attach is not a function`.
+
+- [ ] **Step 3: Extend `src/lib/layers/engine.ts`**
+
+Add the import at the top:
+
+```ts
+import { renderPopup } from './popup';
+```
+
+Add these fields to the class, beside the existing ones:
+
+```ts
+  private hitTests = new Map<string, (point: { x: number; y: number }) => Record<string, unknown> | null>();
+  private onClick: ((e: unknown) => void) | null = null;
+  private onMove: ((e: unknown) => void) | null = null;
+  /** Reverse index: map layer id -> owning manifest id, for clickable layers. */
+  private clickOwner = new Map<string, string>();
+```
+
+Add these methods:
+
+```ts
+  registerHitTest(layerId: string, fn: (point: { x: number; y: number }) => Record<string, unknown> | null): void {
+    this.hitTests.set(layerId, fn);
+  }
+
+  /**
+   * One click handler and one mousemove handler for every layer, replacing 29
+   * hand-registered handlers and a hand-maintained hover array.
+   */
+  attach(): void {
+    if (this.onClick) return;
+
+    this.clickOwner.clear();
+    for (const m of this.mounted.values()) {
+      if (m.render.kind !== 'geojson') continue;
+      for (const dataset of m.datasets) {
+        for (const spec of dataset.layers) {
+          if (spec.clickable) this.clickOwner.set(mapLayerId(m.id, dataset.key, spec.suffix), m.id);
+        }
+      }
+    }
+
+    this.onClick = (raw: unknown) => {
+      const e = raw as { point: { x: number; y: number }; lngLat: { lng: number; lat: number } };
+      const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+      for (const hit of this.map.queryRenderedFeatures(e.point)) {
+        const owner = hit.layer?.id ? this.clickOwner.get(hit.layer.id) : undefined;
+        if (!owner) continue;
+        const m = this.mounted.get(owner);
+        if (!m || !this.isActive(m)) continue;
+        this.dispatch(m, hit.properties ?? {}, lngLat);
+        return;
+      }
+
+      // Only now may a custom renderer claim the click. This is the rule the
+      // satellite pick always intended -- defer to any layer with its own
+      // handler -- except the ids it compares against are derived, so unlike
+      // CLICKABLE_LAYERS they cannot drift out of agreement with reality.
+      for (const [layerId, hitTest] of this.hitTests) {
+        const m = this.mounted.get(layerId);
+        if (!m || !this.isActive(m)) continue;
+        const props = hitTest(e.point);
+        if (props) { this.dispatch(m, props, lngLat); return; }
+      }
+    };
+
+    this.onMove = (raw: unknown) => {
+      const e = raw as { point: { x: number; y: number } };
+      const canvas = this.map.getCanvas();
+      // Never fight another owner that has already claimed the cursor.
+      if (canvas.style.cursor && canvas.style.cursor !== 'pointer') return;
+
+      const over = this.map.queryRenderedFeatures(e.point).some(hit => {
+        const owner = hit.layer?.id ? this.clickOwner.get(hit.layer.id) : undefined;
+        const m = owner ? this.mounted.get(owner) : undefined;
+        return !!m && this.isActive(m);
+      });
+
+      if (over) canvas.style.cursor = 'pointer';
+      else if (canvas.style.cursor === 'pointer') canvas.style.cursor = '';
+    };
+
+    this.map.on('click', this.onClick);
+    this.map.on('mousemove', this.onMove);
+  }
+
+  detach(): void {
+    if (this.onClick) { this.map.off('click', this.onClick); this.onClick = null; }
+    if (this.onMove) { this.map.off('mousemove', this.onMove); this.onMove = null; }
+  }
+
+  private dispatch(m: NormalisedManifest, properties: Record<string, unknown>, lngLat: [number, number]): void {
+    const interaction = m.interaction;
+    if (!interaction) return;
+    if (interaction.kind === 'popup') {
+      this.opts.onSelect({ kind: 'popup', layerId: m.id, html: renderPopup(interaction.popup, properties), properties, lngLat });
+    } else if (interaction.kind === 'panel') {
+      this.opts.onSelect({ kind: 'panel', layerId: m.id, panel: interaction.panel, properties, lngLat });
+    } else {
+      this.opts.onSelect({ kind: 'adapter', layerId: m.id, adapter: interaction.adapter, properties, lngLat });
+    }
+  }
+```
+
+Extend `destroy()` so it detaches:
+
+```ts
+  destroy(): void {
+    this.detach();
+    this.hitTests.clear();
+    this.clickOwner.clear();
+    this.mounted.clear();
+    this.raw.clear();
+    this.active = new Set();
+  }
+```
+
+- [ ] **Step 4: Run the tests to verify they pass**
+
+Run: `npx vitest run src/lib/layers/engine.test.ts`
+Expected: PASS, 27 tests (16 from Task 12 plus 11 here).
+
+- [ ] **Step 5: Run the whole suite, lint and build**
+
+Run: `npm test && npm run lint && npm run build`
+Expected: all pass.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/lib/layers/engine.ts src/lib/layers/engine.test.ts
+git commit -m "feat(layers): one click handler and one hover handler for every layer
+
+Replaces the pattern of 29 hand-registered click handlers plus a
+separately hand-maintained hover array. Dispatch goes to the topmost hit
+whose layer id is in the derived clickable set.
+
+Custom renderers get a hit-test seam, consulted only when no ordinary
+layer was hit -- the rule the satellite pick always intended. The
+difference is that the ids it defers to are derived, so unlike
+CLICKABLE_LAYERS they cannot drift out of agreement with the layers that
+actually exist."
+```
+
+---
+
+## Stage 1 exit criteria
+
+Before starting Plan 2, confirm all of the following:
+
+- [ ] `npm test` passes, including the ten new suites: `format`, `values`, `popup`, `validate`, `loader`, `substitute`, `config-store`, `registry`, `http-source`, `serve`, `engine`.
+- [ ] `npm run lint` passes.
+- [ ] `npm run build` passes.
+- [ ] `curl -s -X POST 'http://localhost:3000/api/layer-source?reload=1'` returns 200 with an empty layer list.
+- [ ] `curl -s 'http://localhost:3000/api/layer-config'` returns `{"layers":{}}`.
+- [ ] Clicking an aircraft with satellites enabled opens the aircraft popup (Task 1's fix).
+- [ ] `git diff master --stat` shows **one** modified pre-existing source file (`OsirisMap.tsx`, one line) plus `docker-compose.yml` and `.gitignore`. Everything else is new. If any other existing file changed, something has leaked out of scope.
+
+## Spec coverage for this plan
+
+| Spec section | Covered by |
+|---|---|
+| §3 manifest schema | Task 2 (types), Task 5 (validation/normalisation) |
+| §3 ValueSpec, four forms | Task 3 |
+| §3 Format vocabulary, MapLibre coercion | Task 2 |
+| §4 requiredConfig, store, precedence | Task 7 |
+| §4 asymmetric endpoints, admin token | Task 11 |
+| §5 file layout | Tasks 2–13 |
+| §5 MapLike + engine surface | Task 12 |
+| §5 derived clickable set | Tasks 12, 13 |
+| §5 one click handler | Task 13 |
+| §5 palette tokens | Task 12 |
+| §5 registry discovery, drop-in override, reload | Tasks 8, 11 |
+| §5 manifest errors surfaced with filename | Tasks 5, 8 |
+| §6 pure planner, four refresh modes | Task 6 |
+| §6 retry semantics for all layers | Task 6 |
+| §6 request dedup by resolved URL | Tasks 10, 11 |
+| §7 click bug fixed first, standalone | Task 1 |
+| §8 stage 0 baseline commit | Task 1 |
+
+**Deferred to Plan 2 (stage 2):** `groups.ts`, `useLayerData.ts`, `LayerPanel` manifest rows, the credential form UI, the plugins diagnostics panel, `OsirisMap` wiring, popup adapters, the six proof-set manifests and their adapters, and the popup fixtures.
+
+**Deferred to Plan 3 (stages 3–5):** bulk migration, computed sources, overlay renderers, the satellites custom renderer, stream mode, and all deletion.
