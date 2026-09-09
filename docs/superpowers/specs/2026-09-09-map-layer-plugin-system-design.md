@@ -718,6 +718,52 @@ source clears; theme switch → colours still track the palette.
 
 ---
 
+## 8a. Deferred: CCTV level-of-detail rendering
+
+A requirement raised after this spec was approved, recorded here so it is not lost, and
+**deliberately excluded from this design**.
+
+**The requirement.** CCTV markers should render at a level of detail derived from their
+distance to the current viewport centre: full-size video tiles with live playback within a
+central radius, progressively smaller square thumbnails beyond it, degrading to plain dots at
+the far edge. The tiering must recompute as the operator pans, not only on zoom change. Video
+playback must not begin until the map has been stationary for a debounce interval, so dragging
+across the map does not spin up a wave of video decoders.
+
+**Why it is deferred rather than folded in.** This is a UX and rendering redesign, not a
+structural migration. Nothing in the current codebase does distance-based LOD: `cctv-dots` and
+`cctv-glow` are plain zoom-scaled circles, and the separate `cctv_previews` overlay has neither
+distance tiering nor playback debouncing. Bundling a behaviour change into the same step as a
+structural migration would make a regression impossible to attribute — if CCTV looks wrong
+afterwards, no one could tell whether the engine or the new LOD scheme caused it.
+
+**Sequencing decision.** CCTV migrates into the plugin system in stage 3 **preserving today's
+behaviour exactly**. The LOD scheme lands afterwards as its own feature, against a migrated and
+verified CCTV layer.
+
+**Open questions a brainstorming pass must answer before this can be planned.** These are
+genuine design decisions, not details:
+
+1. Is the central radius measured in screen pixels or ground distance? Pixels keep the tile
+   count stable across zooms; ground distance keeps a given camera's treatment stable as you
+   zoom. These behave very differently and the choice is not obvious.
+2. How many tiers, and what are the thresholds? Is the progression continuous or stepped?
+3. What is the cap on concurrently playing videos? Decoder count, not tile count, is the real
+   resource limit, and 10,000+ cameras means the cap is doing the load-bearing work.
+4. What is the idle debounce interval, and does zoom-only movement reset it the same as a pan?
+5. What happens to the existing `cctv_previews` toggle — is it replaced by this, or does it
+   become the on/off switch for the video tier?
+6. Does the MapLibre dot layer remain underneath the DOM overlay at all tiers, or do dots and
+   tiles become mutually exclusive?
+7. Does any of this belong in the manifest schema — an `lod` block on the `overlay` RenderSpec —
+   or is it internal to the CCTV overlay component? Making it declarative is only worth it if a
+   second layer would ever use it.
+
+**Schema impact assessment.** Low, and possibly zero. CCTV is an `overlay` render kind — a React
+DOM component positioned over the map — so LOD tiers, video lifecycle and idle debouncing are
+overlay-component concerns. They need no new `MapLayerSpec` or paint concepts, because none of
+this is drawn by MapLibre. Question 7 above decides whether anything reaches the schema at all.
+
 ## 9. Success criteria
 
 1. Adding a layer whose upstream returns clean JSON requires **one new JSON file** dropped into
