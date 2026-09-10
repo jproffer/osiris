@@ -1,15 +1,7 @@
 import { readFile, writeFile, mkdir, chmod, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 
-/**
- * Runtime credential store, deliberately separate from the manifest
- * directory: manifests are shareable and commit-friendly, secrets are
- * neither, and one .gitignore mistake must not publish a token.
- *
- * Values are write-only from the outside world. There is no endpoint that
- * returns one, masked or otherwise -- only configStatus(), which reports
- * whether a key is set and where it came from.
- */
+/** Separate from the manifest dir (secrets vs. shareable config); write-only -- no endpoint returns a value. */
 let configDir = process.env.OSIRIS_CONFIG_DIR ?? '/app/config';
 
 /** Test seam. Production reads OSIRIS_CONFIG_DIR or falls back to /app/config. */
@@ -35,10 +27,7 @@ async function readStore(): Promise<Record<string, string>> {
 
 async function writeStore(data: Record<string, string>): Promise<void> {
   await mkdir(configDir, { recursive: true });
-  // Write to a temp file and rename over the real path, so a crash mid-write
-  // (or two concurrent writes) can never leave layer-config.json truncated --
-  // rename() is atomic when source and destination share a filesystem, which
-  // they do here since the temp file lives in the same directory.
+  // Temp file + rename: atomic on the same filesystem, so a crash mid-write can't truncate the real file.
   const tmpPath = `${storePath()}.tmp`;
   await writeFile(tmpPath, JSON.stringify(data, null, 2), { mode: 0o600 });
   await chmod(tmpPath, 0o600);

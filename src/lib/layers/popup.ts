@@ -2,15 +2,7 @@ import type { PopupSpec } from './types';
 import { resolveValue } from './values';
 import { formatValue } from './format';
 
-/**
- * The single escaping path for popup content.
- *
- * Escaping used to be per-handler discipline in OsirisMap, and roughly a
- * third of the handlers omitted it -- rad-dots, ship-dots, balloon-dots,
- * infra-dots, maritime-dots and choke-dots all interpolated upstream OSINT
- * strings raw, and weather-dots put an unvalidated feed URL into an href.
- * Every value below goes through htmlEsc or urlSafe on its way out.
- */
+/** The single escaping path -- was per-handler discipline before, and a third of OsirisMap's handlers skipped it. */
 export function htmlEsc(s: unknown): string {
   return String(s ?? '')
     .replace(/&/g, '&amp;')
@@ -48,9 +40,7 @@ export function renderPopup(spec: PopupSpec, props: Record<string, unknown>): st
   }).join('');
 
   const links = (spec.links ?? []).map(l => {
-    // A template that is a bare {prop} yields the raw property value, which
-    // is exactly the case weather-dots got wrong -- so the result is scheme
-    // checked whether it came from a literal or from upstream data.
+    // A bare {prop} yields the raw value (what weather-dots got wrong) -- still scheme-checked either way.
     const raw = /^\{(\w+)\}$/.test(l.url)
       ? String(props[l.url.slice(1, -1)] ?? '')
       : interpolate(l.url, props);

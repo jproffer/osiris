@@ -4,12 +4,7 @@ import type { MapLike } from './maplike';
 import { renderPopup } from './popup';
 import { isDatasetActive } from './loader';
 
-/**
- * What a click resolved to. A discriminated union rather than a bare feature,
- * because the three interaction kinds are handled by different owners: the
- * host renders `popup` html into a MapLibre popup, opens a React panel for
- * `panel`, and calls a named function for `adapter`.
- */
+/** What a click resolved to -- one kind per owner: popup html, a React panel, or a named adapter. */
 export type Selection =
   | { kind: 'popup'; layerId: string; html: string; properties: Record<string, unknown>; lngLat: [number, number] }
   | { kind: 'panel'; layerId: string; panel: string; properties: Record<string, unknown>; lngLat: [number, number] }
@@ -57,11 +52,7 @@ export class LayerEngine {
 
   constructor(private map: MapLike, private opts: EngineOptions) {}
 
-  /**
-   * Add every source and layer once, hidden. Toggling visibility later is far
-   * cheaper than adding and removing layers, and it is what OsirisMap already
-   * does with its pre-allocated source list.
-   */
+  /** Add every source/layer once, hidden -- toggling visibility later beats adding/removing layers. */
   mount(manifests: NormalisedManifest[]): void {
     for (const m of manifests) {
       if (this.mounted.has(m.id)) continue;
@@ -105,9 +96,7 @@ export class LayerEngine {
     for (const m of this.mounted.values()) {
       if (m.render.kind === 'geojson') {
         for (const dataset of m.datasets) {
-          // Per-dataset, not per-manifest: a multi-dataset manifest can have
-          // one dataset active and another not (e.g. "Commercial" flights on,
-          // "Military" off).
+          // Per-dataset, not per-manifest: e.g. Commercial on, Military off within one manifest.
           const visible = isDatasetActive(m, this.active, dataset.key);
           for (const spec of dataset.layers) {
             const id = mapLayerId(m.id, dataset.key, spec.suffix);
@@ -127,13 +116,7 @@ export class LayerEngine {
     if (m) this.apply(m, datasetKey);
   }
 
-  /**
-   * Push the currently-visible slice into the source.
-   *
-   * Variant filters are row-level, so the union of the active variants'
-   * filters decides what is drawn. The manifest's own id being active means
-   * "all", which is how the satellites toggle relates to its categories.
-   */
+  /** Pushes the visible slice: union of active variant filters, or all rows if the manifest id is active. */
   private apply(m: NormalisedManifest, datasetKey: string): void {
     const src = sourceId(m.id, datasetKey);
     if (!this.map.getSource(src)) return;
@@ -172,11 +155,7 @@ export class LayerEngine {
     }
   }
 
-  /**
-   * The clickable set, derived rather than authored. This is the structural
-   * fix for the CLICKABLE_LAYERS drift bug: there is no second list to
-   * disagree with the first.
-   */
+  /** The clickable set, derived not authored -- no second list left to drift out of sync. */
   clickableLayerIds(): string[] {
     const out: string[] = [];
     for (const m of this.mounted.values()) {
@@ -194,10 +173,7 @@ export class LayerEngine {
     this.hitTests.set(layerId, fn);
   }
 
-  /**
-   * One click handler and one mousemove handler for every layer, replacing 29
-   * hand-registered handlers and a hand-maintained hover array.
-   */
+  /** One click and one mousemove handler for every layer, replacing 29 hand-registered ones. */
   attach(): void {
     if (this.onClick) return;
 
@@ -214,10 +190,7 @@ export class LayerEngine {
         return;
       }
 
-      // Only now may a custom renderer claim the click. This is the rule the
-      // satellite pick always intended -- defer to any layer with its own
-      // handler -- except the ids it compares against are derived, so unlike
-      // CLICKABLE_LAYERS they cannot drift out of agreement with reality.
+      // Only now may a custom renderer claim the click -- defers to any layer with its own handler first.
       for (const [layerId, hitTest] of this.hitTests) {
         const m = this.mounted.get(layerId);
         if (!m || !this.isActive(m)) continue;

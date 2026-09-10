@@ -38,13 +38,7 @@ function checkSource(src: unknown, where: string, errors: string[]): void {
   }
 }
 
-/**
- * Validate and normalise one manifest.
- *
- * Returns errors rather than throwing: a malformed drop-in file has to reach
- * the plugins diagnostics panel naming the file and the fault, so an operator
- * who typos a JSON file sees it in the UI instead of in container logs.
- */
+/** Returns errors rather than throwing, so a typo'd drop-in file names itself in the UI, not container logs. */
 export function validateManifest(raw: unknown, origin: string): ValidationResult {
   const errors: string[] = [];
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {

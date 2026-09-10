@@ -11,12 +11,7 @@ export interface AdapterContext {
 
 export type SourceAdapter = (ctx: AdapterContext) => Promise<GeoFeature[]>;
 
-/**
- * Named adapters for sources a manifest cannot describe -- H3 decoding, a
- * two-level response keyed by callsign, a 40-source fan-out. Registered here
- * rather than discovered, because an adapter is compiled code and must be
- * reviewable.
- */
+/** For sources a manifest can't describe (H3 decoding, fan-outs) -- registered, not discovered, so code stays reviewable. */
 export const ADAPTERS: Record<string, SourceAdapter> = {};
 
 export function registerAdapter(name: string, fn: SourceAdapter): void {

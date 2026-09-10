@@ -1,14 +1,7 @@
 import type { ValueSpec } from './types';
 import { coerce } from './format';
 
-/**
- * Resolve a ValueSpec against a feature's properties.
- *
- * Range stops are evaluated in the order written, so a manifest lists them
- * highest-first. That reads the way the thresholds are spoken about ("350 and
- * above is danger, 100 and above is elevated") rather than requiring the
- * author to remember a sort order.
- */
+/** Range stops evaluate highest-first, as written -- matches how thresholds are spoken about ("350+ is danger"). */
 export function resolveValue(spec: ValueSpec, props: Record<string, unknown>): string {
   if (typeof spec === 'string') return spec;
 

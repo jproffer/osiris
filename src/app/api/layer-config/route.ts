@@ -7,15 +7,7 @@ import {
 } from '@/lib/layers/config-store';
 import { safeFetch, getClientIp, isRateLimited } from '@/lib/ssrf-guard';
 
-/**
- * Credential status, writes and deletes.
- *
- * Asymmetric on purpose: there is no path here that returns a stored value,
- * masked or otherwise. A visitor on an unauthenticated instance therefore
- * cannot exfiltrate the operator's key -- the genuine risk -- though they can
- * overwrite one, which breaks a layer until it is re-entered. Set
- * OSIRIS_ADMIN_TOKEN to close that on an internet-exposed instance.
- */
+/** No path returns a stored value -- overwrite risk only; OSIRIS_ADMIN_TOKEN gates that. */
 
 function unauthorised(request: NextRequest): boolean {
   const admin = process.env.OSIRIS_ADMIN_TOKEN;

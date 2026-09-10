@@ -10,13 +10,7 @@ export interface LoadPlan {
   bbox?: Viewport;
 }
 
-/**
- * Every map here is keyed by `${layerId}:${datasetKey}`, not by layerId alone.
- * A manifest with two datasets (e.g. "commercial" and "military" flights) must
- * track each dataset's own fetch history independently -- otherwise loading
- * "commercial" first marks the whole manifest fetched, and "military" is
- * never planned when its toggle is switched on later.
- */
+/** Keyed by `${layerId}:${datasetKey}`, not layerId alone -- each dataset needs its own fetch history. */
 export interface LoadState {
   fetched: Set<string>;
   inflight: Set<string>;
@@ -42,11 +36,7 @@ function refreshOf(d: DatasetSpec): RefreshSpec | null {
   return s.kind === 'http' || s.kind === 'adapter' ? s.refresh : null;
 }
 
-/**
- * Whether one specific dataset of a manifest should be active, given which
- * toggle ids are currently on. Shared with engine.ts so the two modules
- * cannot independently drift on what "active" means for a dataset.
- */
+/** Is this dataset active, given the on toggle ids -- shared with engine.ts so the two can't drift. */
 export function isDatasetActive(m: NormalisedManifest, active: ReadonlySet<string>, datasetKey: string): boolean {
   if (active.has(m.id)) return true;
   const primary = m.datasets[0]?.key;
@@ -84,12 +74,7 @@ export function planLoads(
     const pending = fetchable.filter(k => !state.inflight.has(datasetStateKey(m.id, k)));
     if (pending.length === 0) continue;
 
-    // Datasets that have never landed a successful fetch get grouped into one
-    // "initial" plan -- this is the shared-URL optimisation: several datasets
-    // needing their first load go out as a single request from the caller's
-    // point of view. Datasets already fetched are left for the poll/viewport
-    // check below, so a sibling dataset activated later doesn't get starved
-    // behind one that already loaded.
+    // Never-fetched datasets group into one "initial" plan; already-fetched ones fall to poll/viewport below.
     const notYetFetched = pending.filter(k => !state.fetched.has(datasetStateKey(m.id, k)));
     if (notYetFetched.length > 0) {
       const first = m.datasets.find(d => d.key === notYetFetched[0])!;
@@ -124,10 +109,7 @@ export function planLoads(
   return plans;
 }
 
-/**
- * Mark before awaiting, so a re-render mid-flight cannot double-fetch. Every
- * dataset key the plan groups together is marked, not just the manifest id.
- */
+/** Mark before awaiting so a mid-flight re-render can't double-fetch -- per dataset key, not per manifest. */
 export function markStarted(state: LoadState, plan: LoadPlan): void {
   const vk = plan.bbox ? viewportKey(plan.bbox) : null;
   for (const k of plan.datasetKeys) {
@@ -138,11 +120,7 @@ export function markStarted(state: LoadState, plan: LoadPlan): void {
   }
 }
 
-/**
- * Release the mark when nothing landed. Without this, one upstream timeout
- * leaves the layer empty for the rest of the session -- which is exactly what
- * 17 layers do today. Applied per dataset key, matching markStarted.
- */
+/** Releases the mark on failure -- without it, one timeout empties a layer for the whole session. */
 export function markSettled(state: LoadState, plan: LoadPlan, ok: boolean, now: number): void {
   for (const k of plan.datasetKeys) {
     const dk = datasetStateKey(plan.layerId, k);

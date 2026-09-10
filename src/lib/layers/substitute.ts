@@ -1,11 +1,4 @@
-/**
- * The two substitutions a manifest may use, expanded server-side only.
- *
- * Deliberately not a template language: a closed set of date tokens, plus
- * {config.KEY} for a declared credential. The date tokens exist because
- * Safecast's `since` parameter is the only way to get recent rows from that
- * API -- `order=captured_at desc` is silently ignored by it.
- */
+/** Not a template language -- date tokens exist because Safecast's `since` param is the only way to get recent rows. */
 const DATE_TOKEN = /^today(?:-(\d+)d)?$/;
 
 function isoDay(base: Date, daysBack: number): string {

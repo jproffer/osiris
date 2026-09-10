@@ -1,11 +1,4 @@
-/**
- * The narrow slice of MapLibre the engine uses.
- *
- * This exists so the engine can be unit-tested: vitest runs in a node
- * environment with no WebGL and no DOM, so a real maplibregl.Map cannot be
- * constructed. FakeMap records what the engine did, which is what the tests
- * assert against.
- */
+/** The narrow MapLibre slice the engine uses -- lets it be unit-tested without WebGL/DOM (vitest is node-only). */
 export interface MapLike {
   addSource(id: string, spec: unknown): void;
   getSource(id: string): { setData(data: unknown): void } | undefined;

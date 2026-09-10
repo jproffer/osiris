@@ -19,14 +19,7 @@ export type ServeResult =
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
 
-/**
- * Resolve one manifest's requested datasets into FeatureCollections.
- *
- * All I/O is injected so this is unit-testable. The route wires in safeFetch
- * (which re-validates every redirect hop against reserved ranges) wrapped in
- * cachedSource -- and because that cache is keyed by the *resolved* URL, two
- * datasets sharing a URL cost exactly one upstream request.
- */
+/** Resolves a manifest's datasets into FeatureCollections. I/O is injected; two datasets sharing a URL cost one request. */
 export async function serveDatasets(
   manifest: NormalisedManifest,
   datasetKeys: string[],

@@ -7,26 +7,13 @@ import { readConfigValue } from '@/lib/layers/config-store';
 import { safeFetch, getClientIp, isRateLimited } from '@/lib/ssrf-guard';
 import { cachedSource } from '@/lib/sourceCache';
 
-/**
- * The browser never sends an upstream URL -- it sends a layer id, and this
- * route resolves id -> manifest -> URL. That is what stops an unauthenticated
- * instance being usable as an open fetch proxy: the reachable host set is
- * exactly what the operator installed.
- */
+/** Browser sends a layer id, never a URL -- stops an open instance being used as a fetch proxy. */
 
-/**
- * cachedSource caches arrays (it was written for camera indexes), so a
- * response body rides as [text]. That buys TTL, in-flight dedup and
- * stale-on-error for free -- and the dedup is what makes two datasets
- * sharing a URL cost one upstream request.
- */
+/** cachedSource caches arrays, so a response body rides as [text] -- free TTL, dedup, stale-on-error. */
 const fetchers = new Map<string, () => Promise<string[]>>();
 
 function textFetcher(url: string, headers: Record<string, string>, ttlMs: number) {
-  // Headers can carry a real credential after substitution, and cachedSource
-  // logs this key verbatim on a fetch failure -- so the key carries a hash of
-  // the headers, never the headers themselves, while still uniquely
-  // identifying the url+headers pair for caching purposes.
+  // Hash the headers into the key -- they may carry a credential, and cachedSource logs the key on failure.
   const headerHash = createHash('sha256').update(JSON.stringify(headers)).digest('hex').slice(0, 16);
   const key = `layer-source:${url}|${headerHash}`;
   let fetcher = fetchers.get(key);
@@ -70,10 +57,7 @@ export async function GET(request: NextRequest) {
   const result = await serveDatasets(manifest, datasetKeys, bbox, {
     fetchText: async (url, headers, ttlMs) => {
       const [text] = await textFetcher(url, headers, ttlMs)();
-      // cachedSource resolves to [] (not a rejection) on a first-ever fetch
-      // failure with nothing to fall back on -- so `text` is undefined here.
-      // Throwing turns that back into a failure serveDatasets' catch block
-      // can see, rather than a silent 200 with zero features.
+      // cachedSource swallows a first failure to []; rethrow so serveDatasets reports it, not a silent empty success.
       if (text === undefined) throw new Error(`upstream fetch failed for ${url}`);
       return text;
     },

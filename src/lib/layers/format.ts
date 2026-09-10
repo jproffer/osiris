@@ -1,10 +1,6 @@
 import type { Format } from './types';
 
-/**
- * MapLibre serialises feature properties, so a boolean arrives as the string
- * 'true' and a number as '42'. Every popup handler used to rediscover this
- * for itself; it is handled once, here.
- */
+/** MapLibre serialises properties, so booleans/numbers arrive as strings -- handled once, here. */
 export function coerce(v: unknown): unknown {
   if (typeof v !== 'string') return v;
   if (v === 'true') return true;
