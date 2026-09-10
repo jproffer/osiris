@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { FakeMap } from './maplike';
-import { LayerEngine } from './engine';
+import { LayerEngine, type Selection } from './engine';
 import type { NormalisedManifest } from './types';
 
 function manifest(over: Partial<NormalisedManifest> = {}): NormalisedManifest {
@@ -166,5 +166,186 @@ describe('LayerEngine.setPalette', () => {
     engine.mount([manifest()]);
     engine.setPalette({ cctv: '#FF0000' });
     expect((map.layers.get('radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#FF0000');
+  });
+});
+
+function popupManifest(): NormalisedManifest {
+  return {
+    ...manifest(),
+    interaction: {
+      kind: 'popup',
+      popup: { accent: '#7E57C2', title: { property: 'place' }, fields: [{ label: 'READING', property: 'value' }] },
+    },
+  };
+}
+
+function engineWithSelections(map: FakeMap) {
+  const seen: Selection[] = [];
+  const engine = new LayerEngine(map, { onSelect: s => seen.push(s), palette: {} });
+  return { engine, seen };
+}
+
+const clickEvent = { point: { x: 10, y: 20 }, lngLat: { lng: 5, lat: 6 } };
+
+describe('LayerEngine interaction', () => {
+  it('renders popup html for a click on a clickable layer', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima', value: '15' } }];
+    map.emit('click', clickEvent);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].kind).toBe('popup');
+    if (seen[0].kind !== 'popup') return;
+    expect(seen[0].layerId).toBe('radiation');
+    expect(seen[0].html).toContain('Fukushima');
+    expect(seen[0].lngLat).toEqual([5, 6]);
+  });
+
+  it('ignores a click that hits no clickable layer', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'basemap-water' }, properties: {} }];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+
+  it('ignores a click on a non-clickable layer of a mounted manifest', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'radiation--glow' }, properties: {} }];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+
+  it('takes the topmost hit when several clickable layers overlap', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest(), { ...popupManifest(), id: 'piracy' }]);
+    engine.setActive(new Set(['radiation', 'piracy']));
+    engine.attach();
+
+    map.hits = [
+      { layer: { id: 'piracy--dots' }, properties: { place: 'Gulf of Guinea' } },
+      { layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } },
+    ];
+    map.emit('click', clickEvent);
+    expect(seen[0].layerId).toBe('piracy');
+  });
+
+  it('emits a panel selection rather than html', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([{ ...manifest(), id: 'cctv', interaction: { kind: 'panel', panel: 'cctv' } }]);
+    engine.setActive(new Set(['cctv']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'cctv--dots' }, properties: { id: 'cam-1' } }];
+    map.emit('click', clickEvent);
+    expect(seen[0].kind).toBe('panel');
+    if (seen[0].kind !== 'panel') return;
+    expect(seen[0].panel).toBe('cctv');
+    expect(seen[0].properties).toEqual({ id: 'cam-1' });
+  });
+
+  it('emits an adapter selection by name', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([{ ...manifest(), id: 'flights', interaction: { kind: 'adapter', adapter: 'flights' } }]);
+    engine.setActive(new Set(['flights']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'flights--dots' }, properties: { callsign: 'BA117' } }];
+    map.emit('click', clickEvent);
+    expect(seen[0].kind).toBe('adapter');
+    if (seen[0].kind !== 'adapter') return;
+    expect(seen[0].adapter).toBe('flights');
+  });
+
+  it('falls through to a registered hit test only when no layer was hit', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest(), { ...manifest(), id: 'satellites', render: { kind: 'custom', renderer: 'satellites' }, interaction: { kind: 'adapter', adapter: 'satellites' } }]);
+    engine.setActive(new Set(['radiation', 'satellites']));
+    engine.registerHitTest('satellites', () => ({ name: 'ISS' }));
+    engine.attach();
+
+    // An ordinary layer wins.
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } }];
+    map.emit('click', clickEvent);
+    expect(seen[0].layerId).toBe('radiation');
+
+    // Nothing ordinary under the cursor: the custom renderer gets it.
+    map.hits = [];
+    map.emit('click', clickEvent);
+    expect(seen[1].layerId).toBe('satellites');
+    expect(seen[1].properties).toEqual({ name: 'ISS' });
+  });
+
+  it('does not consult a hit test for an inactive layer', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([{ ...manifest(), id: 'satellites', render: { kind: 'custom', renderer: 'satellites' }, interaction: { kind: 'adapter', adapter: 'satellites' } }]);
+    engine.registerHitTest('satellites', () => ({ name: 'ISS' }));
+    engine.setActive(new Set());
+    engine.attach();
+
+    map.hits = [];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
+  });
+
+  it('sets a pointer cursor over a clickable layer and clears it after', () => {
+    const map = new FakeMap();
+    const { engine } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
+    map.emit('mousemove', clickEvent);
+    expect(map.canvas.style.cursor).toBe('pointer');
+
+    map.hits = [];
+    map.emit('mousemove', clickEvent);
+    expect(map.canvas.style.cursor).toBe('');
+  });
+
+  it('does not steal a cursor another owner has already claimed', () => {
+    const map = new FakeMap();
+    const { engine } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+
+    map.canvas.style.cursor = 'crosshair';
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
+    map.emit('mousemove', clickEvent);
+    expect(map.canvas.style.cursor).toBe('crosshair');
+  });
+
+  it('stops responding after detach', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+    engine.attach();
+    engine.detach();
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'X' } }];
+    map.emit('click', clickEvent);
+    expect(seen).toEqual([]);
   });
 });

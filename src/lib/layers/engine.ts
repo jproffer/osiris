@@ -1,6 +1,7 @@
 import type { GeoFeature, MapLayerSpec, NormalisedManifest, VariantFilter } from './types';
 import { mapLayerId, sourceId } from './types';
 import type { MapLike } from './maplike';
+import { renderPopup } from './popup';
 
 /**
  * What a click resolved to. A discriminated union rather than a bare feature,
@@ -47,6 +48,11 @@ export class LayerEngine {
   private mounted = new Map<string, NormalisedManifest>();
   private raw = new Map<string, GeoFeature[]>();
   private active: ReadonlySet<string> = new Set();
+  private hitTests = new Map<string, (point: { x: number; y: number }) => Record<string, unknown> | null>();
+  private onClick: ((e: unknown) => void) | null = null;
+  private onMove: ((e: unknown) => void) | null = null;
+  /** Reverse index: map layer id -> owning manifest id, for clickable layers. */
+  private clickOwner = new Map<string, string>();
 
   constructor(private map: MapLike, private opts: EngineOptions) {}
 
@@ -179,7 +185,93 @@ export class LayerEngine {
     return out;
   }
 
+  registerHitTest(layerId: string, fn: (point: { x: number; y: number }) => Record<string, unknown> | null): void {
+    this.hitTests.set(layerId, fn);
+  }
+
+  /**
+   * One click handler and one mousemove handler for every layer, replacing 29
+   * hand-registered handlers and a hand-maintained hover array.
+   */
+  attach(): void {
+    if (this.onClick) return;
+
+    this.clickOwner.clear();
+    for (const m of this.mounted.values()) {
+      if (m.render.kind !== 'geojson') continue;
+      for (const dataset of m.datasets) {
+        for (const spec of dataset.layers) {
+          if (spec.clickable) this.clickOwner.set(mapLayerId(m.id, dataset.key, spec.suffix), m.id);
+        }
+      }
+    }
+
+    this.onClick = (raw: unknown) => {
+      const e = raw as { point: { x: number; y: number }; lngLat: { lng: number; lat: number } };
+      const lngLat: [number, number] = [e.lngLat.lng, e.lngLat.lat];
+
+      for (const hit of this.map.queryRenderedFeatures(e.point)) {
+        const owner = hit.layer?.id ? this.clickOwner.get(hit.layer.id) : undefined;
+        if (!owner) continue;
+        const m = this.mounted.get(owner);
+        if (!m || !this.isActive(m)) continue;
+        this.dispatch(m, hit.properties ?? {}, lngLat);
+        return;
+      }
+
+      // Only now may a custom renderer claim the click. This is the rule the
+      // satellite pick always intended -- defer to any layer with its own
+      // handler -- except the ids it compares against are derived, so unlike
+      // CLICKABLE_LAYERS they cannot drift out of agreement with reality.
+      for (const [layerId, hitTest] of this.hitTests) {
+        const m = this.mounted.get(layerId);
+        if (!m || !this.isActive(m)) continue;
+        const props = hitTest(e.point);
+        if (props) { this.dispatch(m, props, lngLat); return; }
+      }
+    };
+
+    this.onMove = (raw: unknown) => {
+      const e = raw as { point: { x: number; y: number } };
+      const canvas = this.map.getCanvas();
+      // Never fight another owner that has already claimed the cursor.
+      if (canvas.style.cursor && canvas.style.cursor !== 'pointer') return;
+
+      const over = this.map.queryRenderedFeatures(e.point).some(hit => {
+        const owner = hit.layer?.id ? this.clickOwner.get(hit.layer.id) : undefined;
+        const m = owner ? this.mounted.get(owner) : undefined;
+        return !!m && this.isActive(m);
+      });
+
+      if (over) canvas.style.cursor = 'pointer';
+      else if (canvas.style.cursor === 'pointer') canvas.style.cursor = '';
+    };
+
+    this.map.on('click', this.onClick);
+    this.map.on('mousemove', this.onMove);
+  }
+
+  detach(): void {
+    if (this.onClick) { this.map.off('click', this.onClick); this.onClick = null; }
+    if (this.onMove) { this.map.off('mousemove', this.onMove); this.onMove = null; }
+  }
+
+  private dispatch(m: NormalisedManifest, properties: Record<string, unknown>, lngLat: [number, number]): void {
+    const interaction = m.interaction;
+    if (!interaction) return;
+    if (interaction.kind === 'popup') {
+      this.opts.onSelect({ kind: 'popup', layerId: m.id, html: renderPopup(interaction.popup, properties), properties, lngLat });
+    } else if (interaction.kind === 'panel') {
+      this.opts.onSelect({ kind: 'panel', layerId: m.id, panel: interaction.panel, properties, lngLat });
+    } else {
+      this.opts.onSelect({ kind: 'adapter', layerId: m.id, adapter: interaction.adapter, properties, lngLat });
+    }
+  }
+
   destroy(): void {
+    this.detach();
+    this.hitTests.clear();
+    this.clickOwner.clear();
     this.mounted.clear();
     this.raw.clear();
     this.active = new Set();
