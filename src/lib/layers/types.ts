@@ -69,11 +69,13 @@ export interface DatasetSpec {
   legacyKey?: string;
 }
 
+export interface VariantFilter { property: string; equals?: unknown; in?: unknown[] }
+
 export interface VariantSpec {
   id: string;
   label: string;
   dataset?: string;
-  filter?: unknown[];
+  filter?: VariantFilter;
   defaultOn?: boolean;
 }
 
