@@ -315,6 +315,10 @@ export default function Dashboard() {
     gdelt_events: false,
     cf_outages: false,
     cf_attacks: false,
+    gps_jamming: false,
+    piracy: false,
+    power_outages: false,
+    dark_fleet: false,
   });
   // Server-side capability flags — gate layers that need credentials.
   const [capabilities, setCapabilities] = useState<Record<string, boolean>>({});
@@ -604,6 +608,18 @@ export default function Dashboard() {
 
   // ── LAYER-AWARE DATA LOADING — only fetch when layer is toggled ON ──
   const layerFetchedRef = useRef<Set<string>>(new Set());
+  /* /api/cctv?region=all only ever runs once per session, and dataRef's merge
+     is shallow — a later fetch's `cameras` array replaces the earlier one
+     outright rather than adding to it. Panning to a region that timed out (or
+     was never in view yet) needs its cameras added to what's already on the
+     map, not swapped in for it, so the accumulated set lives here keyed by id. */
+  const cctvCamerasRef = useRef<Map<string, any>>(new Map());
+  const mergeCctv = useCallback((json: any) => {
+    for (const cam of json?.cameras || []) {
+      if (cam?.id) cctvCamerasRef.current.set(cam.id, cam);
+    }
+    return { cameras: Array.from(cctvCamerasRef.current.values()) };
+  }, []);
   useEffect(() => {
 
     // Flights
@@ -628,9 +644,29 @@ export default function Dashboard() {
       fetchEndpoint('/api/fires');
       layerFetchedRef.current.add('fires');
     }
+    // GPS/GNSS jamming (gpsjam.org daily H3 grid)
+    if (activeLayers.gps_jamming && !layerFetchedRef.current.has('gps_jamming')) {
+      fetchEndpoint('/api/gps-jamming', d => ({ gps_jamming: d.cells }));
+      layerFetchedRef.current.add('gps_jamming');
+    }
+    // Maritime piracy (IMB Piracy Reporting Centre)
+    if (activeLayers.piracy && !layerFetchedRef.current.has('piracy')) {
+      fetchEndpoint('/api/piracy', d => ({ piracy: d.incidents }));
+      layerFetchedRef.current.add('piracy');
+    }
+    // US power outages (ODIN)
+    if (activeLayers.power_outages && !layerFetchedRef.current.has('power_outages')) {
+      fetchEndpoint('/api/power-outages', d => ({ power_outages: d.outages }));
+      layerFetchedRef.current.add('power_outages');
+    }
+    // Dark fleet / AIS gap events (Global Fishing Watch)
+    if (activeLayers.dark_fleet && !layerFetchedRef.current.has('dark_fleet')) {
+      fetchEndpoint('/api/dark-fleet', d => ({ dark_fleet: d.events }));
+      layerFetchedRef.current.add('dark_fleet');
+    }
     // CCTV
     if (activeLayers.cctv && !layerFetchedRef.current.has('cctv')) {
-      fetchEndpoint(`/api/cctv?region=all&_t=${Date.now()}`);
+      fetchEndpoint(`/api/cctv?region=all&_t=${Date.now()}`, mergeCctv);
       layerFetchedRef.current.add('cctv');
     }
     // Maritime
@@ -746,6 +782,56 @@ export default function Dashboard() {
     }
     return () => intervals.forEach(clearInterval);
   }, [activeLayers, fetchEndpoint]);
+
+  /* ── CCTV BY VIEWPORT — panning to a new area must not stay blank ──
+     The region=all load above covers the whole map once, but any region that
+     timed out (or that a slow upstream hadn't finished for) is empty until
+     something asks for it again. The backend already picks regions from
+     lat/lng via getRegionsForBounds; this just calls it on moveend, debounced
+     so a drag doesn't fire a fetch per frame, and merges the result in rather
+     than replacing the accumulated set. */
+  useEffect(() => {
+    if (!activeLayers.cctv || !mapCenter) return;
+    const timer = setTimeout(() => {
+      fetchEndpoint(`/api/cctv?lat=${mapCenter.lat}&lng=${mapCenter.lng}&radius=500`, mergeCctv);
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [mapCenter, activeLayers.cctv, fetchEndpoint, mergeCctv]);
+
+  /* ── ARCGIS LAYERS BY VIEWPORT — same problem, same fix ──
+     ArcGIS Feature Service queries are bbox-scoped by design (the API has no
+     "give me everything" mode for most public services), and `handleImport`
+     in ArcGISPanel only ever queries once, with whatever bbox was on screen
+     at import time. Panning away from that spot showed nothing new — the
+     layer wasn't broken, it just only ever asked for one rectangle. This
+     re-queries each imported layer's source on moveend, same debounce as
+     CCTV, and merges by feature id so already-seen features aren't dropped
+     when a later query's bbox doesn't happen to re-cover them. */
+  const arcgisLayerIds = arcgisLayers.map(l => l.id).join(',');
+  useEffect(() => {
+    if (!mapCenter?.bounds || arcgisLayers.length === 0) return;
+    const bounds = mapCenter.bounds;
+    const timer = setTimeout(() => {
+      const bbox = `${bounds.west},${bounds.south},${bounds.east},${bounds.north}`;
+      const featureKey = (f: any) => f?.properties?.OBJECTID ?? f?.id ?? JSON.stringify(f?.geometry);
+      arcgisLayers.forEach(layer => {
+        fetch(`/api/arcgis?service=${encodeURIComponent(layer.url)}&bbox=${bbox}`)
+          .then(r => (r.ok ? r.json() : null))
+          .then(geojson => {
+            if (!geojson?.features?.length) return;
+            setArcgisLayers(prev => prev.map(l => {
+              if (l.id !== layer.id) return l;
+              const merged = new Map((l.geojson?.features || []).map((f: any) => [featureKey(f), f]));
+              for (const f of geojson.features) merged.set(featureKey(f), f);
+              return { ...l, geojson: { type: 'FeatureCollection', features: Array.from(merged.values()) } };
+            }));
+          })
+          .catch(() => {});
+      });
+    }, 800);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapCenter, arcgisLayerIds]);
 
   /* ── LIVE MALWARE — pushed over SSE while the layer is on ──
      Detections arrive when URLhaus reports them rather than on a timer, so

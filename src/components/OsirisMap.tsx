@@ -306,7 +306,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-fire', isGhost ? phantomPurple : '#E65100', 10);
       createDot(map, 'dot-cctv', cameraColor, 10);
 
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks'];
+      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks', 'gps-jamming', 'piracy', 'power-outages', 'dark-fleet'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // ── FLIGHT ROUTE VISUALIZATION SOURCES & LAYERS ──
@@ -366,6 +366,34 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       map.addLayer({ id: 'fires-heat', type: 'circle', source: 'fires', paint: {
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,2, 5,4, 10,8],
         'circle-color': '#E65100', 'circle-opacity': 0.45, 'circle-blur': 0.5,
+      }});
+
+      // GPS/GNSS jamming — magenta, intensity scaled by bad-report ratio
+      map.addLayer({ id: 'gps-jamming-dots', type: 'circle', source: 'gps-jamming', paint: {
+        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,10, 10,20],
+        'circle-color': ['interpolate',['linear'],['get','badRatio'], 0,'#F9A825', 0.5,'#E91E8C', 1,'#B71C6B'],
+        'circle-opacity': ['interpolate',['linear'],['get','badRatio'], 0,0.15, 1,0.55],
+        'circle-blur': 0.6,
+      }});
+
+      // Maritime piracy — hazard red
+      map.addLayer({ id: 'piracy-dots', type: 'circle', source: 'piracy', paint: {
+        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3, 5,5, 10,9],
+        'circle-color': '#D32F2F', 'circle-opacity': 0.8,
+        'circle-stroke-width': 1, 'circle-stroke-color': '#FFCDD2', 'circle-stroke-opacity': 0.5,
+      }});
+
+      // Power outages — amber, radius scaled by customers affected
+      map.addLayer({ id: 'power-outages-dots', type: 'circle', source: 'power-outages', paint: {
+        'circle-radius': ['interpolate',['linear'],['get','customersAffected'], 1,3, 500,8, 5000,16],
+        'circle-color': '#FDD835', 'circle-opacity': 0.5, 'circle-blur': 0.4,
+      }});
+
+      // Dark fleet / AIS gaps — ghost purple
+      map.addLayer({ id: 'dark-fleet-dots', type: 'circle', source: 'dark-fleet', paint: {
+        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3, 5,5, 10,9],
+        'circle-color': '#7E57C2', 'circle-opacity': 0.75,
+        'circle-stroke-width': 1, 'circle-stroke-color': '#D1C4E9', 'circle-stroke-opacity': 0.5,
       }});
 
       // CCTV — outer glow ring (black/white depending on theme)
@@ -969,7 +997,8 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       'gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots',
       'balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots',
       'sdk-sea','sdk-air','sdk-intel','malware-dots','cyber-heads','gdelt-events-dots',
-      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots']);
+      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots',
+      'gps-jamming-dots','piracy-dots','power-outages-dots','dark-fleet-dots']);
 
     // Satellites are picked on the GPU: the pick pass runs the same vertex
     // shader as the visible one, so the target is always exactly where the
@@ -1063,6 +1092,66 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           <div><span style="color:#5C5A54;">COORDS</span><br/><span style="color:#E8E6E0;">${coords[1].toFixed(3)}°, ${coords[0].toFixed(3)}°</span></div>
         </div>
         <a href="https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;l:noaa20-viirs,viirs,modis_a,modis_t;@${coords[0]},${coords[1]},10z" target="_blank" style="${linkStyle}color:#FF6B00;border:1px solid rgba(255,107,0,0.4);background:rgba(255,107,0,0.1);">🛰️ NASA FIRMS MAP</a>
+      </div>`);
+    });
+
+    // ── GPS/GNSS Jamming (gpsjam.org) ──
+    map.on('click', 'gps-jamming-dots', e => {
+      if (!e.features?.length) return;
+      const p = e.features[0].properties as any;
+      const coords = (e.features[0].geometry as any).coordinates;
+      const pct = (Number(p.badRatio) * 100).toFixed(0);
+      popup(coords, `<div style="${pStyle}border:1px solid rgba(233,30,140,0.4);">
+        <div style="color:#E91E8C;font-size:12px;font-weight:700;margin-bottom:6px;">📡 GPS INTERFERENCE</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;margin-bottom:8px;">
+          <div><span style="color:#5C5A54;">BAD REPORTS</span><br/><span style="color:#E91E8C;">${pct}%</span></div>
+          <div><span style="color:#5C5A54;">AIRCRAFT SAMPLED</span><br/><span style="color:#E8E6E0;">${(Number(p.goodAircraft)||0) + (Number(p.badAircraft)||0)}</span></div>
+        </div>
+        <a href="https://gpsjam.org/?lat=${coords[1]}&lon=${coords[0]}&z=6" target="_blank" style="${linkStyle}color:#E91E8C;border:1px solid rgba(233,30,140,0.4);background:rgba(233,30,140,0.1);">📡 GPSJAM.ORG</a>
+      </div>`);
+    });
+
+    // ── Maritime Piracy (IMB Piracy Reporting Centre) ──
+    map.on('click', 'piracy-dots', e => {
+      if (!e.features?.length) return;
+      const p = e.features[0].properties as any;
+      const coords = (e.features[0].geometry as any).coordinates;
+      popup(coords, `<div style="${pStyle}border:1px solid rgba(211,47,47,0.4);min-width:240px;">
+        <div style="color:#D32F2F;font-size:12px;font-weight:700;margin-bottom:6px;">☠️ PIRACY / ARMED ROBBERY</div>
+        <div style="font-size:9px;color:#5C5A54;margin-bottom:6px;">INCIDENT ${htmlEsc(p.incidentNumber)} — ${htmlEsc(p.date)}</div>
+        <div style="color:#E8E6E0;font-size:10px;line-height:1.4;max-height:120px;overflow-y:auto;margin-bottom:8px;">${htmlEsc(p.sitrep) || 'No sitrep available.'}</div>
+        <a href="https://icc-ccs.org/map/" target="_blank" style="${linkStyle}color:#D32F2F;border:1px solid rgba(211,47,47,0.4);background:rgba(211,47,47,0.1);">🗺️ IMB LIVE MAP</a>
+      </div>`);
+    });
+
+    // ── Power Outages (ODIN) ──
+    map.on('click', 'power-outages-dots', e => {
+      if (!e.features?.length) return;
+      const p = e.features[0].properties as any;
+      const coords = (e.features[0].geometry as any).coordinates;
+      popup(coords, `<div style="${pStyle}border:1px solid rgba(253,216,53,0.4);">
+        <div style="color:#FDD835;font-size:12px;font-weight:700;margin-bottom:6px;">⚡ POWER OUTAGE</div>
+        <div style="font-size:9px;color:#5C5A54;margin-bottom:6px;">${htmlEsc(p.county)}, ${htmlEsc(p.state)}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;">
+          <div><span style="color:#5C5A54;">CUSTOMERS AFFECTED</span><br/><span style="color:#FDD835;">${Number(p.customersAffected).toLocaleString()}</span></div>
+          <div><span style="color:#5C5A54;">UTILITY</span><br/><span style="color:#E8E6E0;">${htmlEsc(p.utility)}</span></div>
+        </div>
+      </div>`);
+    });
+
+    // ── Dark Fleet / AIS Gap Events (Global Fishing Watch) ──
+    map.on('click', 'dark-fleet-dots', e => {
+      if (!e.features?.length) return;
+      const p = e.features[0].properties as any;
+      const coords = (e.features[0].geometry as any).coordinates;
+      popup(coords, `<div style="${pStyle}border:1px solid rgba(126,87,194,0.4);">
+        <div style="color:#7E57C2;font-size:12px;font-weight:700;margin-bottom:6px;">👻 AIS GAP — SUSPECTED DARK ACTIVITY</div>
+        <div style="font-size:9px;color:#5C5A54;margin-bottom:6px;">${htmlEsc(p.vesselName)}${p.flag ? ` (${htmlEsc(p.flag)})` : ''}${p.vesselType ? ` — ${htmlEsc(p.vesselType)}` : ''}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;">
+          <div><span style="color:#5C5A54;">GAP DURATION</span><br/><span style="color:#7E57C2;">${Number(p.durationHours).toLocaleString()}h</span></div>
+          <div><span style="color:#5C5A54;">DISTANCE</span><br/><span style="color:#E8E6E0;">${Number(p.distanceKm).toLocaleString()} km</span></div>
+        </div>
+        <a href="https://globalfishingwatch.org/map/" target="_blank" style="${linkStyle}color:#7E57C2;border:1px solid rgba(126,87,194,0.4);background:rgba(126,87,194,0.1);">🐟 GLOBAL FISHING WATCH</a>
       </div>`);
     });
 
@@ -1292,7 +1381,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     });
 
     // ── Generic hover for clickables ──
-    ['conflict-icons','cctv-dots','eq-circles','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','malware-dots','cyber-heads','gdelt-events-dots','cf-outage-dots','cf-attack-dots'].forEach(layer => {
+    ['conflict-icons','cctv-dots','eq-circles','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','malware-dots','cyber-heads','gdelt-events-dots','cf-outage-dots','cf-attack-dots','gps-jamming-dots','piracy-dots','power-outages-dots','dark-fleet-dots'].forEach(layer => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     });
@@ -1936,6 +2025,26 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
 
   useEffect(() => {
     if (!mapReady) return;
+    setGeo('gps-jamming', activeLayers.gps_jamming && data.gps_jamming ? data.gps_jamming.map((c: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] }, properties: { badRatio: c.badRatio, goodAircraft: c.goodAircraft, badAircraft: c.badAircraft } })) : []);
+  }, [mapReady, data.gps_jamming, activeLayers.gps_jamming, setGeo]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    setGeo('piracy', activeLayers.piracy && data.piracy ? data.piracy.map((p: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [p.lng, p.lat] }, properties: { incidentNumber: p.incidentNumber, date: p.date, sitrep: p.sitrep } })) : []);
+  }, [mapReady, data.piracy, activeLayers.piracy, setGeo]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    setGeo('power-outages', activeLayers.power_outages && data.power_outages ? data.power_outages.map((o: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [o.lng, o.lat] }, properties: { county: o.county, state: o.state, utility: o.utility, customersAffected: o.customersAffected } })) : []);
+  }, [mapReady, data.power_outages, activeLayers.power_outages, setGeo]);
+
+  useEffect(() => {
+    if (!mapReady) return;
+    setGeo('dark-fleet', activeLayers.dark_fleet && data.dark_fleet ? data.dark_fleet.map((e: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [e.lng, e.lat] }, properties: { vesselName: e.vesselName, flag: e.flag, vesselType: e.vesselType, durationHours: e.durationHours, distanceKm: e.distanceKm } })) : []);
+  }, [mapReady, data.dark_fleet, activeLayers.dark_fleet, setGeo]);
+
+  useEffect(() => {
+    if (!mapReady) return;
     setGeo('weather', activeLayers.weather && data.weather_events ? data.weather_events.map((w: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [w.lng, w.lat] }, properties: { title: w.title, type: w.type, icon: w.icon, severity: w.severity, source: w.source, id: w.id } })) : []);
   }, [mapReady, data.weather_events, activeLayers.weather, setGeo]);
 
@@ -2097,6 +2206,10 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setVis(['fl-military'], activeLayers.military);
     setVis(['cctv-glow','cctv-dots','cctv-label'], activeLayers.cctv);
     setVis(['fires-heat'], activeLayers.fires);
+    setVis(['gps-jamming-dots'], activeLayers.gps_jamming);
+    setVis(['piracy-dots'], activeLayers.piracy);
+    setVis(['power-outages-dots'], activeLayers.power_outages);
+    setVis(['dark-fleet-dots'], activeLayers.dark_fleet);
     setVis(['weather-glow','weather-dots','weather-label'], activeLayers.weather);
     setVis(['infra-glow','infra-dots','infra-label'], activeLayers.infrastructure);
     setVis(['maritime-glow','maritime-dots','maritime-label'], activeLayers.maritime);

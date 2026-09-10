@@ -67,6 +67,8 @@ const LAYER_GROUPS: LayerGroupDef[] = [
     icon: Ship,
     layers: [
       { key: 'maritime', label: 'Maritime / Naval', dataKey: 'maritime_ships,maritime_ports,maritime_chokepoints' },
+      { key: 'piracy', label: 'Piracy Incidents', dataKey: 'piracy' },
+      { key: 'dark_fleet', label: 'Dark Fleet (AIS Gaps)', dataKey: 'dark_fleet' },
     ],
   },
   {
@@ -108,6 +110,7 @@ const LAYER_GROUPS: LayerGroupDef[] = [
     icon: AlertTriangle,
     layers: [
       { key: 'infrastructure', label: 'Nuclear Facilities', dataKey: 'infrastructure' },
+      { key: 'power_outages', label: 'Power Outages', dataKey: 'power_outages' },
       { key: 'global_incidents', label: 'Global Incidents', dataKey: 'gdelt' },
       { key: 'gdelt_events', label: 'GDELT Events', dataKey: 'gdelt_events' },
     ],
@@ -128,6 +131,14 @@ const LAYER_GROUPS: LayerGroupDef[] = [
     layers: [
       { key: 'cf_outages', label: 'Internet Outages', dataKey: 'cf_outages', requires: 'cloudflare' },
       { key: 'cf_attacks', label: 'Attack Origins', dataKey: 'cf_attack_origins', requires: 'cloudflare' },
+    ],
+  },
+  {
+    label: 'SIGNALS',
+    fullLabel: 'SIGNALS INTEL',
+    icon: Radio,
+    layers: [
+      { key: 'gps_jamming', label: 'GPS/GNSS Jamming', dataKey: 'gps_jamming' },
     ],
   },
   {

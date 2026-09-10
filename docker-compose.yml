@@ -21,18 +21,23 @@ services:
       - NODE_ENV=production
       - PORT=3000
       - HOSTNAME=0.0.0.0
+      # Alpine/musl's getaddrinfo() serializes badly under the app's bursts of
+      # ~30-40 concurrent distinct-hostname fetches each refresh cycle, since
+      # dns.lookup() resolution runs on libuv's threadpool (default 4 threads).
+      # Widening the pool lets those lookups run in parallel instead of
+      # queuing past the fetch connect timeout.
+      - UV_THREADPOOL_SIZE=32
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
     networks:
       - default
-      - umami_default
 
   osiris-cache:
     image: nginx:alpine
     container_name: osiris-cache
     ports:
-      - "8080:8080"
+      - "${OSIRIS_CACHE_PORT:-8080}:8080"
     volumes:
       - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - nginx-cache:/var/cache/nginx
@@ -47,18 +52,12 @@ services:
       context: ./intel
       dockerfile: Dockerfile
     container_name: osiris-intel
-    ports:
-      - "4000:4000"
     restart: unless-stopped
     networks:
       - default
 
 volumes:
   nginx-cache:
-
-networks:
-  umami_default:
-    external: true
 
 # ── CasaOS app-store metadata (ignored by plain Docker Compose) ──
 x-casaos:
