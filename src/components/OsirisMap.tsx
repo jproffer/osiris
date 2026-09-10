@@ -997,7 +997,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       'gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots',
       'balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots',
       'sdk-sea','sdk-air','sdk-intel','malware-dots','cyber-heads','gdelt-events-dots',
-      'cf-outage-dots','cf-attack-dots','flight-dots','military-dots','jet-dots','private-dots',
+      'cf-outage-dots','cf-attack-dots','fl-commercial','fl-military','fl-jets','fl-private',
       'gps-jamming-dots','piracy-dots','power-outages-dots','dark-fleet-dots']);
 
     // Satellites are picked on the GPU: the pick pass runs the same vertex
