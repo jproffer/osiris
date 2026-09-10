@@ -27,6 +27,14 @@ services:
       # Widening the pool lets those lookups run in parallel instead of
       # queuing past the fetch connect timeout.
       - UV_THREADPOOL_SIZE=32
+      # Where drop-in layer manifests and runtime credentials live.
+      - OSIRIS_LAYERS_DIR=/app/layers
+      - OSIRIS_CONFIG_DIR=/app/config
+    volumes:
+      # Operator drop-in manifests. Read-only: the app never writes manifests.
+      - ./layers:/app/layers:ro
+      # Runtime credential store. Writable, and never committed.
+      - ./config:/app/config
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped

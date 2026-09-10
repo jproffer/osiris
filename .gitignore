@@ -56,3 +56,11 @@ scanner_backend_backup.js
 
 # Security - Prevent accidental manual leaks
 *Manual*.md
+
+# Operator drop-in layer manifests and the runtime credential store.
+# The directories are tracked (via .gitkeep) so the compose mounts resolve;
+# their contents are local to an install and secrets must never be committed.
+/layers/*
+!/layers/.gitkeep
+/config/*
+!/config/.gitkeep
