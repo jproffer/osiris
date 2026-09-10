@@ -45,4 +45,9 @@ describe('resolveValue', () => {
     expect(resolveValue(spec, { value: 'unknown' })).toBe('#7E57C2');
     expect(resolveValue(spec, {})).toBe('#7E57C2');
   });
+
+  it('falls back rather than treating a null range property as zero', () => {
+    const spec = { range: { property: 'a', stops: [[0, '#RED']] as [number, string][], fallback: '#GREY' } };
+    expect(resolveValue(spec, { a: null })).toBe('#GREY');
+  });
 });

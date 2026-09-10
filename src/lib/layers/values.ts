@@ -32,7 +32,11 @@ export function resolveValue(spec: ValueSpec, props: Record<string, unknown>): s
   }
 
   const { property, stops, fallback } = spec.range;
-  const n = Number(coerce(props[property]));
+  const raw = coerce(props[property]);
+  // Number(null) is 0 -- without this guard a missing property would be
+  // bucketed as if it were the value zero instead of falling through.
+  if (raw === null || raw === undefined) return fallback;
+  const n = Number(raw);
   if (!Number.isFinite(n)) return fallback;
   for (const [threshold, out] of stops) {
     if (n >= threshold) return out;

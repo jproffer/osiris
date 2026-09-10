@@ -121,6 +121,36 @@ describe('planLoads', () => {
     expect(plans[0].datasetKeys.sort()).toEqual(['commercial', 'military']);
   });
 
+  it('fetches a dataset activated after a sibling dataset already loaded', () => {
+    const m = manifest({
+      id: 'flights',
+      datasets: [
+        { key: 'commercial', source: httpSource(), layers: [] },
+        { key: 'military', source: httpSource(), layers: [] },
+      ],
+      variants: [
+        { id: 'commercial', label: 'Commercial', dataset: 'commercial' },
+        { id: 'military', label: 'Military', dataset: 'military' },
+      ],
+      countFrom: 'commercial',
+    });
+    const state = createLoadState();
+
+    const [plan1] = planLoads([m], new Set(['commercial']), state, null, 0);
+    expect(plan1.datasetKeys).toEqual(['commercial']);
+    markStarted(state, plan1);
+    markSettled(state, plan1, true, 0);
+
+    // Commercial is fetched and stable; nothing new to do for it alone.
+    expect(planLoads([m], new Set(['commercial']), state, null, 1)).toEqual([]);
+
+    // Turning "military" on too must plan military specifically -- not be
+    // swallowed because the manifest as a whole was already marked fetched.
+    const plans2 = planLoads([m], new Set(['commercial', 'military']), state, null, 2);
+    expect(plans2).toHaveLength(1);
+    expect(plans2[0].datasetKeys).toEqual(['military']);
+  });
+
   it('never plans computed, none or stream sources', () => {
     const computed = manifest({ id: 'day_night', datasets: [{ key: 'default', source: { kind: 'computed', compute: 'solar-terminator' }, layers: [] }] });
     const none = manifest({ id: 'terrain_3d', datasets: [{ key: 'default', source: { kind: 'none' }, layers: [] }] });

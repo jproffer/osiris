@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { loadRegistry, reloadRegistry } from '@/lib/layers/registry';
 import { serveDatasets } from '@/lib/layers/serve';
@@ -22,7 +23,12 @@ import { cachedSource } from '@/lib/sourceCache';
 const fetchers = new Map<string, () => Promise<string[]>>();
 
 function textFetcher(url: string, headers: Record<string, string>, ttlMs: number) {
-  const key = `layer-source:${url}|${JSON.stringify(headers)}`;
+  // Headers can carry a real credential after substitution, and cachedSource
+  // logs this key verbatim on a fetch failure -- so the key carries a hash of
+  // the headers, never the headers themselves, while still uniquely
+  // identifying the url+headers pair for caching purposes.
+  const headerHash = createHash('sha256').update(JSON.stringify(headers)).digest('hex').slice(0, 16);
+  const key = `layer-source:${url}|${headerHash}`;
   let fetcher = fetchers.get(key);
   if (!fetcher) {
     fetcher = cachedSource<string>(key, async () => {
@@ -62,7 +68,15 @@ export async function GET(request: NextRequest) {
   }
 
   const result = await serveDatasets(manifest, datasetKeys, bbox, {
-    fetchText: async (url, headers, ttlMs) => (await textFetcher(url, headers, ttlMs)())[0],
+    fetchText: async (url, headers, ttlMs) => {
+      const [text] = await textFetcher(url, headers, ttlMs)();
+      // cachedSource resolves to [] (not a rejection) on a first-ever fetch
+      // failure with nothing to fall back on -- so `text` is undefined here.
+      // Throwing turns that back into a failure serveDatasets' catch block
+      // can see, rather than a silent 200 with zero features.
+      if (text === undefined) throw new Error(`upstream fetch failed for ${url}`);
+      return text;
+    },
     readConfig: readConfigValue,
     adapters: ADAPTERS,
   });

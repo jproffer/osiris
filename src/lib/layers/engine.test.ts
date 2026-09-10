@@ -24,8 +24,31 @@ const engineOf = (map: FakeMap, palette: Record<string, string> = { cctv: '#00E5
   new LayerEngine(map, { onSelect: () => {}, palette });
 
 const feature = (props: Record<string, unknown>) => ({
-  type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: props,
+  type: 'Feature' as const, geometry: { type: 'Point' as const, coordinates: [0, 0] as [number, number] }, properties: props,
 });
+
+function twoDatasetManifest(): NormalisedManifest {
+  return {
+    id: 'flights', label: 'Flights', group: 'AIR', defaultOn: false,
+    countFrom: 'commercial', requiredConfig: [], render: { kind: 'geojson' },
+    datasets: [
+      {
+        key: 'commercial',
+        source: { kind: 'http', url: 'https://x/a', format: 'json', lat: 'lat', lng: 'lng', properties: {}, refresh: { mode: 'once' } },
+        layers: [{ suffix: 'dots', type: 'circle', clickable: true }],
+      },
+      {
+        key: 'military',
+        source: { kind: 'http', url: 'https://x/b', format: 'json', lat: 'lat', lng: 'lng', properties: {}, refresh: { mode: 'once' } },
+        layers: [{ suffix: 'dots', type: 'circle', clickable: true }],
+      },
+    ],
+    variants: [
+      { id: 'commercial', label: 'Commercial', dataset: 'commercial' },
+      { id: 'military', label: 'Military', dataset: 'military' },
+    ],
+  };
+}
 
 describe('LayerEngine.mount', () => {
   it('adds one source per dataset and one layer per spec', () => {
@@ -97,6 +120,26 @@ describe('LayerEngine.setActive', () => {
     engine.mount([manifest({ id: 'satellites', variants: [{ id: 'sat_comms', label: 'Comms', filter: { property: 'category', equals: 'comms' } }] })]);
     engine.setActive(new Set(['sat_comms']));
     expect(map.visibilityOf('satellites--dots')).toBe('visible');
+  });
+
+  it('deactivates one dataset of a multi-dataset manifest while its sibling stays active', () => {
+    const map = new FakeMap();
+    const engine = engineOf(map);
+    engine.mount([twoDatasetManifest()]);
+    engine.setActive(new Set(['commercial', 'military']));
+    engine.setData('flights', 'commercial', [feature({ n: 1 })]);
+    engine.setData('flights', 'military', [feature({ n: 2 })]);
+    expect(map.featuresIn('flights--commercial')).toHaveLength(1);
+    expect(map.featuresIn('flights--military')).toHaveLength(1);
+
+    // Turn "military" off, leaving "commercial" on.
+    engine.setActive(new Set(['commercial']));
+
+    expect(map.visibilityOf('flights--military--dots')).toBe('none');
+    expect(map.featuresIn('flights--military')).toHaveLength(0);
+    // The sibling dataset must be untouched by deactivating the other.
+    expect(map.visibilityOf('flights--commercial--dots')).toBe('visible');
+    expect(map.featuresIn('flights--commercial')).toHaveLength(1);
   });
 });
 
@@ -334,6 +377,23 @@ describe('LayerEngine interaction', () => {
     map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
     map.emit('mousemove', clickEvent);
     expect(map.canvas.style.cursor).toBe('crosshair');
+  });
+
+  it('registers a clickable manifest mounted after attach() has already run', () => {
+    const map = new FakeMap();
+    const { engine, seen } = engineWithSelections(map);
+    // attach() runs first -- e.g. registered once at map init -- and only
+    // afterward does mount() bring in a manifest (a drop-in layer picked up
+    // by a registry reload). Its clicks must not be swallowed.
+    engine.attach();
+    engine.mount([popupManifest()]);
+    engine.setActive(new Set(['radiation']));
+
+    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } }];
+    map.emit('click', clickEvent);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].kind).toBe('popup');
   });
 
   it('stops responding after detach', () => {

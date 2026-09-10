@@ -2,6 +2,7 @@ import type { GeoFeature, MapLayerSpec, NormalisedManifest, VariantFilter } from
 import { mapLayerId, sourceId } from './types';
 import type { MapLike } from './maplike';
 import { renderPopup } from './popup';
+import { isDatasetActive } from './loader';
 
 /**
  * What a click resolved to. A discriminated union rather than a bare feature,
@@ -75,6 +76,7 @@ export class LayerEngine {
         }
         for (const spec of dataset.layers) {
           const id = mapLayerId(m.id, dataset.key, spec.suffix);
+          if (spec.clickable) this.clickOwner.set(id, m.id);
           if (this.map.getLayer(id)) continue;
           this.map.addLayer(this.layerSpec(id, src, spec), this.opts.beforeId);
         }
@@ -101,9 +103,12 @@ export class LayerEngine {
   setActive(ids: ReadonlySet<string>): void {
     this.active = new Set(ids);
     for (const m of this.mounted.values()) {
-      const visible = this.isActive(m);
       if (m.render.kind === 'geojson') {
         for (const dataset of m.datasets) {
+          // Per-dataset, not per-manifest: a multi-dataset manifest can have
+          // one dataset active and another not (e.g. "Commercial" flights on,
+          // "Military" off).
+          const visible = isDatasetActive(m, this.active, dataset.key);
           for (const spec of dataset.layers) {
             const id = mapLayerId(m.id, dataset.key, spec.suffix);
             if (this.map.getLayer(id)) {
@@ -133,7 +138,7 @@ export class LayerEngine {
     const src = sourceId(m.id, datasetKey);
     if (!this.map.getSource(src)) return;
 
-    if (!this.isActive(m)) {
+    if (!isDatasetActive(m, this.active, datasetKey)) {
       this.map.getSource(src)!.setData(EMPTY_FC);
       return;
     }
@@ -195,16 +200,6 @@ export class LayerEngine {
    */
   attach(): void {
     if (this.onClick) return;
-
-    this.clickOwner.clear();
-    for (const m of this.mounted.values()) {
-      if (m.render.kind !== 'geojson') continue;
-      for (const dataset of m.datasets) {
-        for (const spec of dataset.layers) {
-          if (spec.clickable) this.clickOwner.set(mapLayerId(m.id, dataset.key, spec.suffix), m.id);
-        }
-      }
-    }
 
     this.onClick = (raw: unknown) => {
       const e = raw as { point: { x: number; y: number }; lngLat: { lng: number; lat: number } };

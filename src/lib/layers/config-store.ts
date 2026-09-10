@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir, chmod } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, chmod, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /**
@@ -35,10 +35,14 @@ async function readStore(): Promise<Record<string, string>> {
 
 async function writeStore(data: Record<string, string>): Promise<void> {
   await mkdir(configDir, { recursive: true });
-  await writeFile(storePath(), JSON.stringify(data, null, 2), { mode: 0o600 });
-  // writeFile only applies `mode` when it creates the file, so an existing
-  // file keeps whatever permissions it had.
-  await chmod(storePath(), 0o600);
+  // Write to a temp file and rename over the real path, so a crash mid-write
+  // (or two concurrent writes) can never leave layer-config.json truncated --
+  // rename() is atomic when source and destination share a filesystem, which
+  // they do here since the temp file lives in the same directory.
+  const tmpPath = `${storePath()}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(data, null, 2), { mode: 0o600 });
+  await chmod(tmpPath, 0o600);
+  await rename(tmpPath, storePath());
 }
 
 export async function readConfigValue(key: string): Promise<string | undefined> {
