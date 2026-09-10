@@ -59,6 +59,9 @@ const LAYER_GROUPS: LayerGroupDef[] = [
       { key: 'private', label: 'Private', dataKey: 'private_flights' },
       { key: 'jets', label: 'Private Jets', dataKey: 'private_jets' },
       { key: 'military', label: 'Military', dataKey: 'military_flights' },
+      /* Modifies whichever of the four categories above are on, rather than
+         drawing its own aircraft, so it isn't tied to a single `parent`. */
+      { key: 'flight_paths', label: 'Flight Paths', dataKey: '' },
     ],
   },
   {
@@ -345,9 +348,11 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
     >
       <div className="flex-1 flex flex-col items-center gap-1">
         {visibleGroups.map((group) => {
-          /* Sub-layers modify a parent rather than draw anything of their own,
-             so they do not count towards the rail's reading. */
-          const counted = group.layers.filter(l => !l.parent);
+          /* A layer with no dataKey modifies another layer's rendering rather
+             than drawing anything of its own (a parent-tied sub-layer, or a
+             standalone modifier like Flight Paths), so it doesn't count
+             towards the rail's reading. */
+          const counted = group.layers.filter(l => !l.parent && l.dataKey !== '');
           const groupActive = counted.some(l => activeLayers[l.key]);
           const isHovered = hoveredGroup === group.label;
           const Icon = group.icon;

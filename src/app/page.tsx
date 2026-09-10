@@ -335,6 +335,8 @@ export default function Dashboard() {
     private: false,
     jets: false,
     military: false,
+    /* Live breadcrumb trail behind whichever aviation categories are on. */
+    flight_paths: false,
     maritime: true,
     satellites: false,
     sat_comms: false,

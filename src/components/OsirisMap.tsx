@@ -306,7 +306,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-fire', isGhost ? phantomPurple : '#E65100', 10);
       createDot(map, 'dot-cctv', cameraColor, 10);
 
-      const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks', 'gps-jamming', 'piracy', 'power-outages', 'dark-fleet'];
+      const sources = ['flights','military','jets','private-fl','flight-trails','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks', 'gps-jamming', 'piracy', 'power-outages', 'dark-fleet'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // ── FLIGHT ROUTE VISUALIZATION SOURCES & LAYERS ──
@@ -700,6 +700,18 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-field': ['get', 'id'], 'text-size': 11, 'text-font': ['Open Sans Bold'],
         'text-offset': [0, 2], 'text-max-width': 14, 'text-allow-overlap': false,
       }, paint: { 'text-color': '#D32F2F', 'text-halo-color': '#000', 'text-halo-width': 1.5, 'text-opacity': 0.9 }});
+
+      // Breadcrumb trail behind tracked aircraft — added before the icon
+      // layers below so it renders underneath them, not over them. Color is
+      // baked per-feature (same pattern as the balloon dots) so it follows
+      // palette changes without needing its own theme-update wiring.
+      map.addLayer({ id: 'flight-trails-line', type: 'line', source: 'flight-trails', layout: {
+        'line-join': 'round', 'line-cap': 'round',
+      }, paint: {
+        'line-color': ['get', 'color'],
+        'line-width': ['interpolate', ['linear'], ['zoom'], 1, 0.6, 6, 1.2, 12, 2],
+        'line-opacity': 0.55,
+      }});
 
       // Flight layers (WebGL symbol — GPU rendered, handles 50K+ smooth)
       const flightLayers = [
@@ -1630,6 +1642,22 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     ids.forEach(id => { if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none'); });
   }, []);
 
+  /**
+   * Breadcrumb trail history per icao24, independent of the icon layers'
+   * render-count decimation below: flight data refreshes only every 5 min
+   * (rate-limit driven, see page.tsx), so a trail is a real flown path but a
+   * coarse one -- a new point roughly every 5 min, not a smooth live track.
+   * Built from the full per-category arrays rather than the decimated subset
+   * actually drawn as icons, because array order isn't stable across
+   * refreshes -- sampling "every Nth index" would sample a different aircraft
+   * each cycle and never accumulate more than one point for most of them.
+   */
+  const MAX_TRAIL_POINTS = 20;
+  const TRAIL_STALE_MS = 20 * 60 * 1000; // ~4 missed refreshes
+  const flightTrailsRef = useRef<Map<string, {
+    cat: 'commercial' | 'private' | 'jets' | 'military'; color: string; pts: [number, number][]; seenAt: number;
+  }>>(new Map());
+
   // Flight data → GeoJSON (GPU rendered)
   useEffect(() => {
     if (!mapReady) return;
@@ -1647,7 +1675,56 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     setGeo('private-fl', activeLayers.private ? toFeatures(data.private_flights, 2) : []);
     setGeo('jets', activeLayers.jets ? toFeatures(data.private_jets, 2) : []);
     setGeo('military', activeLayers.military ? toFeatures(data.military_flights) : []);
-  }, [mapReady, data.commercial_flights, data.private_flights, data.private_jets, data.military_flights, activeLayers.flights, activeLayers.private, activeLayers.jets, activeLayers.military]);
+
+    if (!activeLayers.flight_paths) {
+      setGeo('flight-trails', []);
+      return;
+    }
+
+    const now = Date.now();
+    const trails = flightTrailsRef.current;
+    const categories: Array<{ cat: 'commercial' | 'private' | 'jets' | 'military'; arr: any[]; on: boolean; color: string }> = [
+      { cat: 'commercial', arr: data.commercial_flights, on: activeLayers.flights, color: palette.flightCivil },
+      { cat: 'private', arr: data.private_flights, on: activeLayers.private, color: palette.flightPrivate },
+      { cat: 'jets', arr: data.private_jets, on: activeLayers.jets, color: palette.flightGov },
+      { cat: 'military', arr: data.military_flights, on: activeLayers.military, color: palette.flightMilitary },
+    ];
+
+    for (const { cat, arr, on, color } of categories) {
+      if (!on || !arr) continue;
+      for (const f of arr) {
+        if (!f.icao24 || !Number.isFinite(f.lng) || !Number.isFinite(f.lat)) continue;
+        let entry = trails.get(f.icao24);
+        if (!entry) { entry = { cat, color, pts: [], seenAt: now }; trails.set(f.icao24, entry); }
+        entry.cat = cat;
+        entry.color = color;
+        entry.seenAt = now;
+        const last = entry.pts[entry.pts.length - 1];
+        if (!last || last[0] !== f.lng || last[1] !== f.lat) {
+          entry.pts.push([f.lng, f.lat]);
+          if (entry.pts.length > MAX_TRAIL_POINTS) entry.pts.shift();
+        }
+      }
+    }
+
+    // Evict aircraft that dropped out of the feed, so this map keyed by
+    // icao24 doesn't grow without bound as traffic rotates through it.
+    for (const [icao, entry] of trails) {
+      if (now - entry.seenAt > TRAIL_STALE_MS) trails.delete(icao);
+    }
+
+    const catOn: Record<string, boolean> = {
+      commercial: activeLayers.flights, private: activeLayers.private, jets: activeLayers.jets, military: activeLayers.military,
+    };
+    const trailFeatures = [...trails.values()]
+      .filter(e => catOn[e.cat] && e.pts.length >= 2)
+      .map(e => ({
+        type: 'Feature' as const,
+        geometry: { type: 'LineString' as const, coordinates: e.pts },
+        properties: { color: e.color },
+      }));
+    setGeo('flight-trails', trailFeatures);
+  }, [mapReady, data.commercial_flights, data.private_flights, data.private_jets, data.military_flights, activeLayers.flights, activeLayers.private, activeLayers.jets, activeLayers.military, activeLayers.flight_paths, palette.flightCivil, palette.flightPrivate, palette.flightGov, palette.flightMilitary]);
 
   /**
    * Pull the palette out of the document whenever it can have changed.
