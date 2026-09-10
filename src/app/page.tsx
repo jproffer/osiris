@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Route, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, Play, Network, Crosshair, Bluetooth, Pentagon, Radio , PenLine } from 'lucide-react';
+import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Route, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, Play, Network, Crosshair, Bluetooth, Pentagon, Radio , PenLine, Plane } from 'lucide-react';
 import IntelFeed from '@/components/IntelFeed';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -129,6 +129,41 @@ function ViewSegment({ active, onClick, title, icon: Icon, label, layoutId }: {
   );
 }
 
+/**
+ * "Add to cart" style flight-path from wherever a watch button was clicked to
+ * the Flight Watch panel, so the popup's silent state change becomes visible.
+ * Renders nothing until the target position is measured (one frame), so the
+ * ghost's only animation is the real flight -- no phantom first-frame jump.
+ */
+function WatchGhost({ start, onDone }: { start: { x: number; y: number }; onDone: () => void }) {
+  const [delta, setDelta] = useState<{ dx: number; dy: number } | null>(null);
+
+  useEffect(() => {
+    const panel = document.getElementById('flight-watch-panel');
+    const r = panel?.getBoundingClientRect();
+    const target = r ? { x: r.left + 28, y: r.top + 28 } : { x: 140, y: 40 };
+    setDelta({ dx: target.x - start.x, dy: target.y - start.y });
+  }, [start]);
+
+  if (!delta) return null;
+
+  return (
+    <motion.div
+      className="fixed z-[500] pointer-events-none flex items-center justify-center w-7 h-7 rounded-full"
+      style={{
+        left: start.x, top: start.y, marginLeft: -14, marginTop: -14,
+        background: 'rgba(0,229,255,0.14)', border: '1px solid rgba(0,229,255,0.45)',
+      }}
+      initial={{ x: 0, y: 0, scale: 1, opacity: 1 }}
+      animate={{ x: delta.dx, y: delta.dy, scale: 0.25, opacity: 0 }}
+      transition={{ duration: 0.6, ease: 'easeIn' }}
+      onAnimationComplete={onDone}
+    >
+      <Plane className="w-3.5 h-3.5 text-[var(--cyan-primary)]" />
+    </motion.div>
+  );
+}
+
 export default function Dashboard() {
   const dataRef = useRef<any>({});
   const [dataVersion, setDataVersion] = useState(0);
@@ -182,14 +217,29 @@ export default function Dashboard() {
   const [navProgress, setNavProgress] = useState<NavProgress | null>(null);
   const [watchedFlights, setWatchedFlights] = useState<WatchedFlight[]>([]);
   const [aircraftAirports, setAircraftAirports] = useState<Record<string, Airport[]>>({});
+  const [flightGhosts, setFlightGhosts] = useState<Array<{ id: string; start: { x: number; y: number } }>>([]);
 
   // The popup lives in raw map HTML, so it hands aircraft over through a global.
   useEffect(() => {
-    (window as unknown as { osirisWatchFlight?: (f: WatchedFlight) => void }).osirisWatchFlight = (f) => {
+    (window as unknown as {
+      osirisWatchFlight?: (f: WatchedFlight, rect?: { left: number; top: number; width: number; height: number }) => void;
+    }).osirisWatchFlight = (f, rect) => {
       if (!f?.icao24) return;
       setWatchedFlights((prev) =>
         prev.some((w) => w.icao24 === f.icao24) ? prev : [...prev, f].slice(-6));
+      // Flies regardless of whether this aircraft was already watched -- the
+      // click still needs visible acknowledgment either way.
+      if (rect) {
+        setFlightGhosts((prev) => [
+          ...prev,
+          { id: `${f.icao24}-${Date.now()}`, start: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } },
+        ]);
+      }
     };
+  }, []);
+
+  const removeFlightGhost = useCallback((id: string) => {
+    setFlightGhosts((prev) => prev.filter((g) => g.id !== id));
   }, []);
 
   const removeWatched = useCallback((icao24: string) => {
@@ -1287,6 +1337,7 @@ export default function Dashboard() {
       {/* ── FLIGHT WATCH ── */}
       {watchedFlights.length > 0 && (
         <motion.div
+          id="flight-watch-panel"
           initial={{ opacity: 0, x: -16 }} animate={{ opacity: 1, x: 0 }}
           className="absolute top-3 z-[380] w-[min(92vw,290px)] pointer-events-auto
                      max-h-[calc(100vh-180px)] overflow-y-auto styled-scrollbar"
@@ -1301,6 +1352,15 @@ export default function Dashboard() {
           />
         </motion.div>
       )}
+
+      {/* Ghost chips flying from the popup's watch button to the panel above --
+          the only visible acknowledgment of a click that otherwise updates
+          state in a corner of the screen the user isn't looking at. */}
+      <AnimatePresence>
+        {flightGhosts.map((g) => (
+          <WatchGhost key={g.id} start={g.start} onDone={() => removeFlightGhost(g.id)} />
+        ))}
+      </AnimatePresence>
 
       {/* ── MAP VIEW CONTROLS ── */}
       <motion.div
