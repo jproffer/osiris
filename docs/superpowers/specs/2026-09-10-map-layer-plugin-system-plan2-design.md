@@ -99,7 +99,7 @@ implementation plan can order tasks within each batch correctly:
 
 | Batch | Capability first needed |
 |---|---|
-| 0 | `GET /api/layers` + `ClientManifest`; engine mount, sentinel, palette; `useLayerData`; manifest panel rows; diagnostics |
+| 0 | `GET /api/layers` + `ClientManifest`; engine mount, sentinel, palette; `useLayerData`; manifest panel rows; diagnostics; same-origin URL resolution (§4.2.1) |
 | 1 | Most of the popup schema extensions (§4) — `range`, `when`, `$lat`/`$lng`, `template` |
 | 2 | The credential form UI (§5); adapter sources |
 | 3 | Multi-dataset manifests sharing one upstream request |
@@ -432,6 +432,7 @@ interface Condition {
   truthy?: boolean;          // MapLibre-coerced: the string 'false' and '0' are falsy
   equals?: unknown;
   in?: unknown[];
+  not?: boolean;             // inverts the whole condition
 }
 
 type ValueSpec =
@@ -458,7 +459,7 @@ interface PopupSpec {
   accent: ValueSpec;
   title: ValueSpec;
   subtitle?: ValueSpec;
-  glyph?: string;                                        // NEW — leading character
+  glyph?: ValueSpec;                                     // NEW — leading character, may be derived
   columns?: 1 | 2;                                       // NEW — default 2
   body?: { value: ValueSpec; maxHeight?: number };       // NEW — scrollable prose block
   badge?: { value: ValueSpec; color?: ValueSpec;         // NEW — pill beside the title
@@ -473,11 +474,41 @@ divider — the shape `cyber-heads` uses today for its severity. `color` default
 `accent` and routes through `resolveColor` (§4.5) like every other colour slot; `when` lets a
 badge be conditional, so a layer can show one only for the states that warrant it.
 
+**Two of these shapes were corrected while authoring the batch-1 manifests**, which is the
+front-loading §1.3 predicted arriving on schedule:
+
+- **`glyph` is a `ValueSpec`, not a string.** `weather-dots` picks its emoji from the event type
+  — 🌀 cyclone, 🌋 volcano, 🌊 flood, 🏜️ drought, 🧊 ice, ⚠️ weather, ⚡ otherwise. A fixed string
+  cannot express that; a `match` ValueSpec can, and costs nothing extra since `resolveValue`
+  already handles it.
+- **`Condition` needs `not`.** `eq-circles` renders one of two mutually exclusive links: a
+  NIGGG-BAS link when `source === 'NIGGG-BAS'`, a USGS event link otherwise. Expressing the
+  "otherwise" branch requires negation, and `not` inverting the whole condition composes with
+  every form rather than adding a `notEquals` beside each one.
+- **Coordinates need two precisions.** Popups *display* coordinates rounded to three decimals
+  (`coords[1].toFixed(3)`) but *link* with full precision (`fires`' FIRMS deep link, and later
+  `gps_jamming`'s gpsjam link). A single `$lat` cannot serve both, and per-token formatting
+  inside a template would be a formatting language. So four pseudo-properties are injected, not
+  two: **`$lat`/`$lng` at full precision, and `$lat3`/`$lng3` pre-rounded to three decimals.**
+
+### 4.2.1 Same-origin source URLs
+
+Most migrated layers keep their existing bespoke route — `/api/fires` does FIRMS parsing,
+`/api/weather` aggregates events — and their manifests point at it rather than at the upstream.
+But `serveDatasets` runs server-side and hands the URL to `safeFetch`, which needs an absolute
+URL; a bare `/api/fires` has no host.
+
+`serve.ts` therefore resolves a URL beginning with `/` against the instance's own origin, taken
+from `OSIRIS_SELF_ORIGIN` and defaulting to `http://127.0.0.1:3000`. This is what makes the Plan
+1 spec's claim about submarine cables true in practice — "the loader does not care that the host
+is itself" — and most layers in batches 2 through 7 depend on it, so it lands in batch 0 rather
+than being discovered per layer.
+
 `renderPopup` gains a third argument: `renderPopup(spec, props, ctx)` where
 `ctx = { lng, lat }`. The engine already holds `lngLat` at dispatch, so this is a parameter
-change, not new plumbing. `$lat` and `$lng` are injected as pseudo-properties wherever a
-property is read — fields, conditions and templates alike. The `$` prefix avoids collision with
-a genuine upstream property named `lat`.
+change, not new plumbing. `$lat`, `$lng`, `$lat3` and `$lng3` are injected as pseudo-properties
+wherever a property is read — fields, conditions and templates alike. The `$` prefix avoids
+collision with a genuine upstream property named `lat`.
 
 ### 4.3 The `badge` hint — rejected on review, then reinstated
 
