@@ -1,4 +1,5 @@
-import type { DatasetSpec, NormalisedManifest, RefreshSpec } from './types';
+import type { ClientDataset, ClientManifest } from './client-manifest';
+import type { RefreshSpec } from './types';
 
 export interface Viewport { west: number; south: number; east: number; north: number }
 
@@ -31,25 +32,24 @@ function viewportKey(v: Viewport): string {
   return [v.west, v.south, v.east, v.north].map(n => n.toFixed(2)).join(',');
 }
 
-function refreshOf(d: DatasetSpec): RefreshSpec | null {
-  const s = d.source;
-  return s.kind === 'http' || s.kind === 'adapter' ? s.refresh : null;
+function refreshOf(d: ClientDataset): RefreshSpec | null {
+  return d.source.refresh ?? null;
 }
 
 /** Is this dataset active, given the on toggle ids -- shared with engine.ts so the two can't drift. */
-export function isDatasetActive(m: NormalisedManifest, active: ReadonlySet<string>, datasetKey: string): boolean {
+export function isDatasetActive(m: ClientManifest, active: ReadonlySet<string>, datasetKey: string): boolean {
   if (active.has(m.id)) return true;
   const primary = m.datasets[0]?.key;
   return m.variants.some(v => active.has(v.id) && (v.dataset ?? primary) === datasetKey);
 }
 
 /** Datasets a manifest currently needs, given which toggles are on. */
-function activeDatasets(m: NormalisedManifest, active: ReadonlySet<string>): string[] {
+function activeDatasets(m: ClientManifest, active: ReadonlySet<string>): string[] {
   return m.datasets.map(d => d.key).filter(k => isDatasetActive(m, active, k));
 }
 
 export function planLoads(
-  manifests: NormalisedManifest[],
+  manifests: ClientManifest[],
   active: ReadonlySet<string>,
   state: LoadState,
   viewport: Viewport | null,

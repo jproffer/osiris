@@ -92,6 +92,7 @@ export function validateManifest(raw: unknown, origin: string): ValidationResult
       defaultOn: m.defaultOn ?? false,
       parent: m.parent,
       countFrom,
+      order: m.order,
       requiredConfig: m.requiredConfig ?? [],
       datasets,
       variants,

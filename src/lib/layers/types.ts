@@ -47,7 +47,8 @@ export type SourceSpec =
       refresh: RefreshSpec;
     }
   | { kind: 'adapter'; adapter: string; params?: Record<string, unknown>; refresh: RefreshSpec }
-  | { kind: 'computed'; compute: string }
+  | { kind: 'computed'; compute: string; dependsOn?: string[]; refresh?: RefreshSpec }
+  | { kind: 'tiles'; spec: Record<string, unknown> }
   | { kind: 'none' };
 
 export interface MapLayerSpec {
@@ -59,6 +60,7 @@ export interface MapLayerSpec {
   minzoom?: number;
   maxzoom?: number;
   clickable?: boolean;
+  sourceLayer?: string;
 }
 
 export interface DatasetSpec {
@@ -110,6 +112,7 @@ export interface LayerManifest {
   defaultOn?: boolean;
   parent?: string;
   countFrom?: string;
+  order?: number;
   requiredConfig?: ConfigFieldSpec[];
   /** Sugar for a single dataset; normalised into `datasets` by validate.ts. */
   source?: SourceSpec;
@@ -128,6 +131,7 @@ export interface NormalisedManifest {
   defaultOn: boolean;
   parent?: string;
   countFrom: string;
+  order?: number;
   requiredConfig: ConfigFieldSpec[];
   datasets: DatasetSpec[];
   variants: VariantSpec[];

@@ -1,4 +1,5 @@
-import type { GeoFeature, MapLayerSpec, NormalisedManifest } from './types';
+import type { ClientManifest } from './client-manifest';
+import type { GeoFeature, MapLayerSpec } from './types';
 import { mapLayerId, sourceId } from './types';
 import type { MapLike } from './maplike';
 import { renderPopup } from './popup';
@@ -35,7 +36,7 @@ function resolveTokens(value: unknown, palette: Record<string, string>): unknown
 }
 
 export class LayerEngine {
-  private mounted = new Map<string, NormalisedManifest>();
+  private mounted = new Map<string, ClientManifest>();
   private raw = new Map<string, GeoFeature[]>();
   private active: ReadonlySet<string> = new Set();
   private hitTests = new Map<string, (point: { x: number; y: number }) => Record<string, unknown> | null>();
@@ -47,7 +48,7 @@ export class LayerEngine {
   constructor(private map: MapLike, private opts: EngineOptions) {}
 
   /** Add every source/layer once, hidden -- toggling visibility later beats adding/removing layers. */
-  mount(manifests: NormalisedManifest[]): void {
+  mount(manifests: ClientManifest[]): void {
     for (const m of manifests) {
       if (this.mounted.has(m.id)) continue;
       this.mounted.set(m.id, m);
@@ -81,7 +82,7 @@ export class LayerEngine {
     return out;
   }
 
-  private isActive(m: NormalisedManifest): boolean {
+  private isActive(m: ClientManifest): boolean {
     return this.active.has(m.id) || m.variants.some(v => this.active.has(v.id));
   }
 
@@ -111,7 +112,7 @@ export class LayerEngine {
   }
 
   /** Pushes the visible slice: union of active variant filters, or all rows if the manifest id is active. */
-  private apply(m: NormalisedManifest, datasetKey: string): void {
+  private apply(m: ClientManifest, datasetKey: string): void {
     const src = sourceId(m.id, datasetKey);
     if (!this.map.getSource(src)) return;
 
@@ -218,7 +219,7 @@ export class LayerEngine {
     if (this.onMove) { this.map.off('mousemove', this.onMove); this.onMove = null; }
   }
 
-  private dispatch(m: NormalisedManifest, properties: Record<string, unknown>, lngLat: [number, number]): void {
+  private dispatch(m: ClientManifest, properties: Record<string, unknown>, lngLat: [number, number]): void {
     const interaction = m.interaction;
     if (!interaction) return;
     if (interaction.kind === 'popup') {

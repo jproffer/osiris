@@ -36,7 +36,7 @@ export async function serveDatasets(
 
     const source: SourceSpec = dataset.source;
 
-    if (source.kind === 'computed' || source.kind === 'none') {
+    if (source.kind === 'computed' || source.kind === 'none' || source.kind === 'tiles') {
       return { ok: false, status: 400, error: `${manifest.id}/${key}: source kind '${source.kind}' is rendered client-side and is not served` };
     }
 
