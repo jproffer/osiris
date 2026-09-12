@@ -101,3 +101,84 @@ describe('renderPopup', () => {
     expect(renderPopup(withSub, { place: 'X', unit: 'cpm' })).toContain('cpm');
   });
 });
+
+describe('conditional fields and links', () => {
+  const base = { accent: '#FF9500', title: 'T' };
+
+  it('omits a field whose condition fails', () => {
+    const spec = {
+      ...base,
+      fields: [
+        { label: 'CAUSE', property: 'cause' },
+        { label: 'ENDED', property: 'end', when: { property: 'end', exists: true } },
+      ],
+    };
+    expect(renderPopup(spec, { cause: 'cable cut' })).not.toContain('ENDED');
+    expect(renderPopup(spec, { cause: 'cable cut', end: '2026-01-01' })).toContain('ENDED');
+  });
+
+  it('omits a link whose condition fails, and keeps the one that passes', () => {
+    const spec = {
+      ...base,
+      fields: [],
+      links: [
+        { label: 'USGS DETAILS', url: 'https://earthquake.usgs.gov/earthquakes/eventpage/{id}',
+          when: { property: 'source', equals: 'NIGGG-BAS', not: true } },
+        { label: 'NIGGG-BAS', url: 'https://ndc.niggg.bas.bg/',
+          when: { property: 'source', equals: 'NIGGG-BAS' } },
+      ],
+    };
+    const usgs = renderPopup(spec, { id: 'us7000', source: 'us' });
+    expect(usgs).toContain('USGS DETAILS');
+    expect(usgs).toContain('eventpage/us7000');
+    expect(usgs).not.toContain('NIGGG-BAS');
+
+    const bas = renderPopup(spec, { id: 'x', source: 'NIGGG-BAS' });
+    expect(bas).toContain('ndc.niggg.bas.bg');
+    expect(bas).not.toContain('USGS DETAILS');
+  });
+
+  it('renders a derived field value', () => {
+    const spec = {
+      ...base,
+      fields: [{
+        label: 'SEVERITY',
+        value: { range: { property: 'severity', stops: [[8, 'CRITICAL'], [6, 'HIGH']] as [number, string][], fallback: 'MEDIUM' } },
+      }],
+    };
+    expect(renderPopup(spec, { severity: 9 })).toContain('CRITICAL');
+    expect(renderPopup(spec, { severity: 7 })).toContain('HIGH');
+    expect(renderPopup(spec, { severity: 2 })).toContain('MEDIUM');
+  });
+
+  it('colours a field from its own spec', () => {
+    const spec = {
+      ...base,
+      fields: [{
+        label: 'VERT RATE', property: 'verticalRate', format: 'fixed1' as const, suffix: ' m/s',
+        color: { range: { property: 'verticalRate', stops: [[0, '#00E676']] as [number, string][], fallback: '#FF3D3D' } },
+      }],
+    };
+    expect(renderPopup(spec, { verticalRate: 2.5 })).toContain('#00E676');
+    expect(renderPopup(spec, { verticalRate: -1.2 })).toContain('#FF3D3D');
+  });
+
+  it('exposes coordinates to fields and links', () => {
+    const spec = {
+      ...base,
+      fields: [{ label: 'COORDS', value: { template: '{$lat3}, {$lng3}' } }],
+      links: [{ label: 'FIRMS', url: 'https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;@{$lng},{$lat},10z' }],
+    };
+    const html = renderPopup(spec, {}, { lng: 142.369, lat: 38.2971234 });
+    expect(html).toContain('38.297, 142.369');
+    expect(html).toContain('142.369');
+  });
+
+  it('still escapes every value', () => {
+    const spec = { ...base, title: { property: 'name' }, fields: [{ label: 'X', property: 'x' }] };
+    const html = renderPopup(spec, { name: '<img src=x onerror=1>', x: '"><script>' });
+    expect(html).not.toContain('<img');
+    expect(html).not.toContain('<script>');
+    expect(html).toContain('&lt;img');
+  });
+});

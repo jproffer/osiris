@@ -223,7 +223,11 @@ export class LayerEngine {
     const interaction = m.interaction;
     if (!interaction) return;
     if (interaction.kind === 'popup') {
-      this.opts.onSelect({ kind: 'popup', layerId: m.id, html: renderPopup(interaction.popup, properties), properties, lngLat });
+      this.opts.onSelect({
+        kind: 'popup', layerId: m.id,
+        html: renderPopup(interaction.popup, properties, { lng: lngLat[0], lat: lngLat[1] }),
+        properties, lngLat,
+      });
     } else if (interaction.kind === 'panel') {
       this.opts.onSelect({ kind: 'panel', layerId: m.id, panel: interaction.panel, properties, lngLat });
     } else {

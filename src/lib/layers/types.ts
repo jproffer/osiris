@@ -12,8 +12,18 @@ export type ValueSpec =
   | { template: string }
   | { range: { property: string; stops: [number, string][]; fallback: string } };
 
-export interface PopupFieldSpec { label: string; property: string; format?: Format; suffix?: string }
-export interface PopupLinkSpec { label: string; url: string }
+export interface PopupFieldSpec {
+  label: string;
+  property?: string;
+  /** Takes precedence over `property` when present. */
+  value?: ValueSpec;
+  format?: Format;
+  suffix?: string;
+  color?: ValueSpec;
+  when?: Condition;
+}
+
+export interface PopupLinkSpec { label: string; url: string; when?: Condition }
 
 export interface PopupSpec {
   accent: ValueSpec;

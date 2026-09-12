@@ -1,6 +1,7 @@
 import type { PopupSpec } from './types';
-import { resolveValue } from './values';
+import { resolveValue, resolveColor, withCoords, type PopupCtx } from './values';
 import { formatValue } from './format';
+import { evaluate } from './condition';
 
 /** The single escaping path -- was per-handler discipline before, and a third of OsirisMap's handlers skipped it. */
 export function htmlEsc(s: unknown): string {
@@ -22,33 +23,44 @@ const LINK = `display:inline-block;margin-top:8px;margin-right:4px;padding:5px 1
 
 /** Expand {property} placeholders, URL-encoding each substituted value. */
 function interpolate(template: string, props: Record<string, unknown>): string {
-  return template.replace(/\{(\w+)\}/g, (_m, key: string) => {
+  return template.replace(/\{(\$?\w+)\}/g, (_m, key: string) => {
     const v = props[key];
     return v === null || v === undefined ? '' : encodeURIComponent(String(v));
   });
 }
 
-export function renderPopup(spec: PopupSpec, props: Record<string, unknown>): string {
-  const accent = resolveValue(spec.accent, props);
+export function renderPopup(
+  spec: PopupSpec,
+  rawProps: Record<string, unknown>,
+  ctx?: PopupCtx,
+): string {
+  const props = withCoords(rawProps, ctx);
+  const accent = resolveColor(spec.accent, props);
   const title = resolveValue(spec.title, props);
   const subtitle = spec.subtitle ? resolveValue(spec.subtitle, props) : null;
 
-  const fields = spec.fields.map(f => {
-    const value = formatValue(props[f.property], f.format, f.suffix ?? '');
-    return `<div><span style="color:#5C5A54;font-size:9px;">${htmlEsc(f.label)}</span><br/>` +
-           `<span style="color:#E8E6E0;">${htmlEsc(value)}</span></div>`;
-  }).join('');
+  const fields = spec.fields
+    .filter(f => !f.when || evaluate(f.when, props))
+    .map(f => {
+      const raw = f.value ? resolveValue(f.value, props) : props[f.property ?? ''];
+      const value = formatValue(raw, f.format, f.suffix ?? '');
+      const colour = f.color ? resolveColor(f.color, props, '#E8E6E0') : '#E8E6E0';
+      return `<div><span style="color:#5C5A54;font-size:9px;">${htmlEsc(f.label)}</span><br/>` +
+             `<span style="color:${colour};">${htmlEsc(value)}</span></div>`;
+    }).join('');
 
-  const links = (spec.links ?? []).map(l => {
-    // A bare {prop} yields the raw value (what weather-dots got wrong) -- still scheme-checked either way.
-    const raw = /^\{(\w+)\}$/.test(l.url)
-      ? String(props[l.url.slice(1, -1)] ?? '')
-      : interpolate(l.url, props);
-    const href = urlSafe(raw);
-    return `<a href="${htmlEsc(href)}" target="_blank" rel="noopener noreferrer" ` +
-           `style="${LINK}color:${htmlEsc(accent)};border:1px solid ${htmlEsc(accent)}66;background:${htmlEsc(accent)}1a;">` +
-           `${htmlEsc(l.label)}</a>`;
-  }).join('');
+  const links = (spec.links ?? [])
+    .filter(l => !l.when || evaluate(l.when, props))
+    .map(l => {
+      // A bare {prop} yields the raw value (what weather-dots got wrong) -- still scheme-checked either way.
+      const raw = /^\{(\$?\w+)\}$/.test(l.url)
+        ? String(props[l.url.slice(1, -1)] ?? '')
+        : interpolate(l.url, props);
+      const href = urlSafe(raw);
+      return `<a href="${htmlEsc(href)}" target="_blank" rel="noopener noreferrer" ` +
+             `style="${LINK}color:${accent};border:1px solid ${accent}66;background:${accent}1a;">` +
+             `${htmlEsc(l.label)}</a>`;
+    }).join('');
 
   return `<div style="${SHELL}border:1px solid ${htmlEsc(accent)}66;min-width:230px;">` +
     `<div style="color:${htmlEsc(accent)};font-size:12px;font-weight:700;letter-spacing:0.08em;margin-bottom:6px;">${htmlEsc(title)}</div>` +
