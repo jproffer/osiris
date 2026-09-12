@@ -429,7 +429,7 @@ export default function Dashboard() {
   const [manifests, setManifests] = useState<ClientManifest[]>([]);
   const [configStatus, setConfigStatus] = useState<ConfigStatus>({});
 
-  useEffect(() => {
+  const loadManifests = useCallback(() => {
     fetch('/api/layers')
       .then(r => (r.ok ? r.json() : null))
       .then(d => {
@@ -448,12 +448,16 @@ export default function Dashboard() {
         });
       })
       .catch(() => { /* panel falls back to LAYER_GROUPS rows */ });
+  }, []);
+
+  useEffect(() => {
+    loadManifests();
 
     fetch('/api/layer-config')
       .then(r => (r.ok ? r.json() : null))
       .then(d => { if (d?.layers) setConfigStatus(d.layers); })
       .catch(() => { /* rows render without credential annotation */ });
-  }, []);
+  }, [loadManifests]);
 
   const activeSet = useMemo(
     () => new Set(Object.entries(activeLayers).filter(([, on]) => on).map(([k]) => k)),
@@ -1503,7 +1507,7 @@ export default function Dashboard() {
 
 
       {/* ── NEW SIDEBAR (Root Level) ── */}
-      {showLayers && !isMobile && <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} manifests={manifests} configStatus={configStatus} />}
+      {showLayers && !isMobile && <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} manifests={manifests} configStatus={configStatus} onReloadManifests={loadManifests} />}
 
 
 

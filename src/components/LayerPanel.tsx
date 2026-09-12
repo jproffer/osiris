@@ -5,9 +5,10 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plane, Satellite, Sun, AlertTriangle, Camera,
   CloudLightning, Ship, Network, Database, Ghost,
-  Flame, Tv, Radio, Mountain, Anchor, Megaphone, SlidersHorizontal, KeyRound
+  Flame, Tv, Radio, Mountain, Anchor, Megaphone, SlidersHorizontal, KeyRound, Puzzle
 } from 'lucide-react';
 import StyleStudio from './StyleStudio';
+import LayerDiagnostics from './LayerDiagnostics';
 import type { ClientManifest } from '@/lib/layers/client-manifest';
 import { buildPanelGroups, type ConfigStatus, type LegacyRow } from '@/lib/layers/panel-rows';
 
@@ -26,6 +27,8 @@ interface LayerPanelProps {
   configStatus?: ConfigStatus;
   /** Opens the credential entry UI for a locked (required-missing) row. Built in batch 2. */
   onOpenCredentials?: (key: string) => void;
+  /** Re-fetches /api/layers after a diagnostics-panel reload. Desktop only. */
+  onReloadManifests?: () => void;
 }
 
 interface LayerDef {
@@ -224,7 +227,7 @@ function SubLayerStem() {
 
 function LayerPanel({
   data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme,
-  capabilities = {}, manifests = [], configStatus = {}, onOpenCredentials,
+  capabilities = {}, manifests = [], configStatus = {}, onOpenCredentials, onReloadManifests,
 }: LayerPanelProps) {
   const [hoveredGroup, setHoveredGroup] = useState<string | null>(null);
   /**
@@ -234,6 +237,7 @@ function LayerPanel({
    */
   const [pinnedGroup, setPinnedGroup] = useState<string | null>(null);
   const [studioOpen, setStudioOpen] = useState(false);
+  const [diagOpen, setDiagOpen] = useState(false);
 
   useEffect(() => {
     if (!pinnedGroup) return;
@@ -557,6 +561,35 @@ function LayerPanel({
       </button>
       <AnimatePresence>
         {studioOpen && <StyleStudio onClose={() => setStudioOpen(false)} />}
+      </AnimatePresence>
+
+      {/* Plugin Diagnostics */}
+      <button
+        onClick={() => setDiagOpen(o => !o)}
+        aria-pressed={diagOpen}
+        className="w-10 h-10 flex items-center justify-center rounded-lg transition-all duration-500 cursor-pointer"
+        style={{ background: diagOpen ? 'var(--hover-accent)' : 'transparent' }}
+        title="Plugin Diagnostics"
+      >
+        <Puzzle
+          className="transition-all duration-500"
+          style={{
+            width: 15,
+            height: 15,
+            color: diagOpen ? 'var(--gold-primary)' : 'rgba(255,255,255,0.15)',
+            filter: diagOpen ? 'drop-shadow(0 0 6px var(--gold-glow))' : 'none',
+          }}
+        />
+      </button>
+      <AnimatePresence>
+        {diagOpen && (
+          <LayerDiagnostics
+            onClose={() => setDiagOpen(false)}
+            manifests={manifests}
+            data={data}
+            onReloaded={() => onReloadManifests?.()}
+          />
+        )}
       </AnimatePresence>
 
       {/* Ghost Protocol Toggle */}
