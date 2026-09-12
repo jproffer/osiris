@@ -1,13 +1,15 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Plane, Satellite, Sun, AlertTriangle, Camera,
   CloudLightning, Ship, Network, Database, Ghost,
-  Flame, Tv, Radio, Mountain, Anchor, Megaphone, SlidersHorizontal
+  Flame, Tv, Radio, Mountain, Anchor, Megaphone, SlidersHorizontal, KeyRound
 } from 'lucide-react';
 import StyleStudio from './StyleStudio';
+import type { ClientManifest } from '@/lib/layers/client-manifest';
+import { buildPanelGroups, type ConfigStatus, type LegacyRow } from '@/lib/layers/panel-rows';
 
 interface LayerPanelProps {
   data: any;
@@ -19,6 +21,11 @@ interface LayerPanelProps {
   /** Server-side capabilities, e.g. { cloudflare: true }. Layers declaring a
    *  `requires` key stay hidden until the matching capability is present. */
   capabilities?: Record<string, boolean>;
+  /** Manifest-driven rows, merged with whatever LAYER_GROUPS still owns. */
+  manifests?: ClientManifest[];
+  configStatus?: ConfigStatus;
+  /** Opens the credential entry UI for a locked (required-missing) row. Built in batch 2. */
+  onOpenCredentials?: (key: string) => void;
 }
 
 interface LayerDef {
@@ -155,6 +162,17 @@ const LAYER_GROUPS: LayerGroupDef[] = [
   },
 ];
 
+/* Layers with no dataKey modify another layer's rendering rather than drawing
+   anything of their own (a parent-tied sub-layer, or a standalone modifier
+   like Flight Paths), so they don't count towards the rail's reading. A
+   PanelRow no longer carries dataKey once merged, so this structural check
+   stays keyed off LAYER_GROUPS directly rather than a runtime count, which
+   would otherwise read as "not counted" for a moment on every reload just
+   because that layer's dataset hasn't arrived yet. */
+const MODIFIER_KEYS = new Set(
+  LAYER_GROUPS.flatMap(g => g.layers.filter(l => l.dataKey === '').map(l => l.key)),
+);
+
 /* ── Minimal Toggle Switch ── */
 /**
  * Presentational only. The row around it is the button, and a button inside a
@@ -204,7 +222,10 @@ function SubLayerStem() {
   );
 }
 
-function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme, capabilities = {} }: LayerPanelProps) {
+function LayerPanel({
+  data, activeLayers, setActiveLayers, isMobile, theme = 'core', setTheme,
+  capabilities = {}, manifests = [], configStatus = {}, onOpenCredentials,
+}: LayerPanelProps) {
   const [hoveredGroup, setHoveredGroup] = useState<string | null>(null);
   /**
    * A pinned group stays open when the pointer leaves. Hover-only flyouts are
@@ -224,21 +245,14 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
   const toggle = (key: string) => setActiveLayers((prev: any) => ({ ...prev, [key]: !prev[key] }));
 
   /** Switch a whole group at once — off if any are on, otherwise all on. */
-  const toggleGroup = (layers: LayerDef[]) => {
-    const anyOn = layers.some(l => activeLayers[l.key]);
+  const toggleGroup = (rows: { key: string }[]) => {
+    const anyOn = rows.some(r => activeLayers[r.key]);
     setActiveLayers((prev: any) => {
       const next = { ...prev };
-      for (const l of layers) next[l.key] = !anyOn;
+      for (const r of rows) next[r.key] = !anyOn;
       return next;
     });
   };
-
-  /* Drop layers whose backing capability is not configured, then drop any group
-     left with nothing to show. */
-  const visibleGroups = LAYER_GROUPS.map(g => ({
-    ...g,
-    layers: g.layers.filter(l => !l.requires || capabilities[l.requires]),
-  })).filter(g => g.layers.length > 0);
 
   const getCount = (dk: string, catKey?: string): number | null => {
     if (!dk) return null;
@@ -256,32 +270,60 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
     return found ? total : null;
   };
 
+  /* LAYER_GROUPS still owns every layer not yet migrated. Both sets of rows
+     merge into one model so the panel does not care which system owns a row. */
+  const legacyRows: LegacyRow[] = useMemo(
+    () => LAYER_GROUPS.flatMap(g =>
+      g.layers
+        .filter(l => !l.requires || capabilities[l.requires])
+        .filter(l => !manifests.some(m => m.id === l.key || m.variants.some(v => v.id === l.key)))
+        .map(l => ({
+          key: l.key, label: l.label, group: g.label, parent: l.parent,
+          count: getCount(l.dataKey, l.catKey),
+        })),
+    ),
+    /* getCount reads `data` from closure and is redefined every render;
+       `data` is already a dependency, so listing getCount too would just
+       defeat the memo. */
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [capabilities, manifests, data],
+  );
+
+  const panelGroups = useMemo(
+    () => buildPanelGroups({ manifests, legacy: legacyRows, data, configStatus }),
+    [manifests, legacyRows, data, configStatus],
+  );
+
   /* ── MOBILE ── */
   if (isMobile) {
     return (
       <div className="flex flex-col gap-5 py-2">
-        {visibleGroups.map((group) => (
-          <div key={group.label} className="flex flex-col gap-2">
+        {panelGroups.map((group) => (
+          <div key={group.key} className="flex flex-col gap-2">
             <div className="text-[10px] font-mono tracking-[0.2em] uppercase text-white/30 border-b border-white/[0.06] pb-1.5">
               {group.fullLabel}
             </div>
             <div className="flex flex-col gap-1">
-              {group.layers.map((layer) => {
-                const isLayerActive = activeLayers[layer.key];
-                const count = getCount(layer.dataKey, layer.catKey);
-                const dormant = !!layer.parent && !activeLayers[layer.parent];
+              {group.rows.map((row) => {
+                const isLayerActive = activeLayers[row.key];
+                const count = row.count;
+                const dormant = !!row.parent && !activeLayers[row.parent];
+                const locked = row.credential === 'required-missing';
                 return (
                   <button
-                    key={layer.key}
-                    onClick={() => toggle(layer.key)}
+                    key={row.key}
+                    onClick={() => locked ? onOpenCredentials?.(row.key) : toggle(row.key)}
                     aria-pressed={!!isLayerActive}
-                    className={`relative w-full flex items-center gap-3 py-2 rounded-md text-left hover:bg-white/[0.04] transition-colors ${layer.parent ? 'pl-[22px] pr-1' : 'px-1'} ${dormant ? 'opacity-40' : ''}`}
+                    className={`relative w-full flex items-center gap-3 py-2 rounded-md text-left hover:bg-white/[0.04] transition-colors ${row.parent ? 'pl-[22px] pr-1' : 'px-1'} ${(dormant || locked) ? 'opacity-40' : ''}`}
                   >
-                    {layer.parent && <SubLayerStem />}
+                    {row.parent && <SubLayerStem />}
                     <ToggleSwitch active={!!isLayerActive} />
                     <span className={`text-[11px] font-mono uppercase tracking-wider flex-1 transition-colors ${isLayerActive ? 'text-white/80' : 'text-white/40'}`}>
-                      {layer.label}
+                      {row.label}
                     </span>
+                    {row.credential !== 'none' && row.credential !== 'satisfied' && (
+                      <KeyRound className="w-3 h-3 text-white/25" aria-label="needs a credential" />
+                    )}
                     {count !== null && (
                       <span className="text-[10px] font-mono tabular-nums text-white/25">
                         {count.toLocaleString()}
@@ -347,32 +389,32 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
       }}
     >
       <div className="flex-1 flex flex-col items-center gap-1">
-        {visibleGroups.map((group) => {
+        {panelGroups.map((group) => {
           /* A layer with no dataKey modifies another layer's rendering rather
              than drawing anything of its own (a parent-tied sub-layer, or a
              standalone modifier like Flight Paths), so it doesn't count
              towards the rail's reading. */
-          const counted = group.layers.filter(l => !l.parent && l.dataKey !== '');
-          const groupActive = counted.some(l => activeLayers[l.key]);
-          const isHovered = hoveredGroup === group.label;
+          const counted = group.rows.filter(r => !r.parent && !MODIFIER_KEYS.has(r.key));
+          const groupActive = counted.some(r => activeLayers[r.key]);
+          const isHovered = hoveredGroup === group.key;
           const Icon = group.icon;
 
-          const activeCount = counted.filter(l => activeLayers[l.key]).length;
-          const isPinned = pinnedGroup === group.label;
+          const activeCount = counted.filter(r => activeLayers[r.key]).length;
+          const isPinned = pinnedGroup === group.key;
           const isOpen = isHovered || isPinned;
 
           return (
             <div
-              key={group.label}
+              key={group.key}
               className="relative flex items-center justify-center"
-              onMouseEnter={() => setHoveredGroup(group.label)}
+              onMouseEnter={() => setHoveredGroup(group.key)}
               onMouseLeave={() => setHoveredGroup(null)}
             >
               {/* A real button, not a div: this is keyboard reachable, focusable
                   and announced. Clicking pins the flyout open so it can be
                   worked in rather than only glanced at. */}
               <button
-                onClick={() => setPinnedGroup(isPinned ? null : group.label)}
+                onClick={() => setPinnedGroup(isPinned ? null : group.key)}
                 aria-expanded={isOpen}
                 aria-label={`${group.fullLabel}${activeCount ? ` — ${activeCount} active` : ''}`}
                 title={group.fullLabel}
@@ -437,7 +479,7 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                       {/* Switching eight satellite layers one at a time is the
                           kind of thing that makes a panel feel unfinished. */}
                       <button
-                        onClick={(e) => { e.stopPropagation(); toggleGroup(group.layers); }}
+                        onClick={(e) => { e.stopPropagation(); toggleGroup(group.rows); }}
                         className="px-1.5 py-0.5 rounded text-[10px] font-mono tracking-wider text-white/40 hover:text-white hover:bg-white/10 transition-colors"
                       >
                         {activeCount > 0 ? 'NONE' : 'ALL'}
@@ -453,24 +495,28 @@ function LayerPanel({ data, activeLayers, setActiveLayers, isMobile, theme = 'co
                       )}
                     </div>
                     <div className="flex flex-col gap-0.5">
-                      {group.layers.map((layer) => {
-                        const isLayerActive = activeLayers[layer.key];
-                        const count = getCount(layer.dataKey, layer.catKey);
-                        const dormant = !!layer.parent && !activeLayers[layer.parent];
+                      {group.rows.map((row) => {
+                        const isLayerActive = activeLayers[row.key];
+                        const count = row.count;
+                        const dormant = !!row.parent && !activeLayers[row.parent];
+                        const locked = row.credential === 'required-missing';
 
                         return (
                           <button
-                            key={layer.key}
-                            onClick={() => toggle(layer.key)}
+                            key={row.key}
+                            onClick={() => locked ? onOpenCredentials?.(row.key) : toggle(row.key)}
                             aria-pressed={!!isLayerActive}
                             title={dormant ? 'Turn the layer above on to use this' : undefined}
-                            className={`relative w-full flex items-center gap-3 py-1.5 rounded-md hover:bg-white/[0.05] transition-colors cursor-pointer text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${layer.parent ? 'pl-[22px] pr-1' : 'px-1'} ${dormant ? 'opacity-40' : ''}`}
+                            className={`relative w-full flex items-center gap-3 py-1.5 rounded-md hover:bg-white/[0.05] transition-colors cursor-pointer text-left focus:outline-none focus-visible:ring-1 focus-visible:ring-white/30 ${row.parent ? 'pl-[22px] pr-1' : 'px-1'} ${(dormant || locked) ? 'opacity-40' : ''}`}
                           >
-                            {layer.parent && <SubLayerStem />}
+                            {row.parent && <SubLayerStem />}
                             <ToggleSwitch active={!!isLayerActive} />
                             <span className={`text-[11px] font-mono uppercase tracking-wider flex-1 transition-colors duration-200 ${isLayerActive ? 'text-white/70' : 'text-white/35'}`}>
-                              {layer.label}
+                              {row.label}
                             </span>
+                            {row.credential !== 'none' && row.credential !== 'satisfied' && (
+                              <KeyRound className="w-3 h-3 text-white/25" aria-label="needs a credential" />
+                            )}
                             {count !== null && (
                               <span className={`text-[10px] font-mono tabular-nums transition-colors ${isLayerActive ? 'text-white/45' : 'text-white/20'}`}>
                                 {count.toLocaleString()}
