@@ -352,10 +352,6 @@ export default function Dashboard() {
     /* The live preview tiles over the camera dots — see CctvPreviews. */
     cctv_previews: true,
     live_news: true,
-    earthquakes: true,
-    fires: false,
-    weather: false,
-    radiation: false,
     infrastructure: false,
     global_incidents: true,
     war_alerts: false,
@@ -435,14 +431,20 @@ export default function Dashboard() {
       .then(d => {
         if (!d?.manifests) return;
         setManifests(d.manifests);
-        /* Seed defaults from the manifests, then let the ?layers= restore below
-           apply over the top. Manifest ids are exactly today's activeLayers
-           keys, so existing share links keep resolving. */
+        /* Seed defaults from the manifests for any id the activeLayers
+           initialiser no longer hardcodes. The ?layers= restore above runs
+           synchronously at mount and only toggles keys that already exist at
+           that moment, so it can never reach an id introduced here — this
+           fetch resolves strictly later. Consult the URL directly instead so
+           a share link naming a manifest-only layer still wins over its
+           defaultOn. */
+        const urlLayers = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('layers') : null;
+        const urlActive = urlLayers ? new Set(urlLayers.split(',')) : null;
         setActiveLayers((prev: any) => {
           const next = { ...prev };
           for (const m of d.manifests as ClientManifest[]) {
-            if (!(m.id in next)) next[m.id] = m.defaultOn;
-            for (const v of m.variants) if (!(v.id in next)) next[v.id] = !!v.defaultOn;
+            if (!(m.id in next)) next[m.id] = urlActive ? urlActive.has(m.id) : m.defaultOn;
+            for (const v of m.variants) if (!(v.id in next)) next[v.id] = urlActive ? urlActive.has(v.id) : !!v.defaultOn;
           }
           return next;
         });
@@ -671,9 +673,6 @@ export default function Dashboard() {
   // ── PROGRESSIVE DATA LOADING (request-optimized) ──
   useEffect(() => {
     // Priority 1: Core feeds (always needed for panels)
-    const eqUrl = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson';
-    const eqTransform = (data: any) => ({ earthquakes: (data.features || []).map((f: any) => ({ id: f.id, lat: f.geometry?.coordinates?.[1] || 0, lng: f.geometry?.coordinates?.[0] || 0, depth: f.geometry?.coordinates?.[2] || 0, magnitude: f.properties?.mag, place: f.properties?.place, time: f.properties?.time, url: f.properties?.url, tsunami: f.properties?.tsunami, type: f.properties?.type, felt: f.properties?.felt, alert: f.properties?.alert })) });
-    fetchEndpoint(eqUrl, eqTransform);
     fetchEndpoint('/api/news');
     /* A cold start can time out every upstream quote and return an all-empty
        feed. Waiting a full poll interval to find out leaves the panel blank for
@@ -697,7 +696,6 @@ export default function Dashboard() {
 
     // Polling — OPTIMIZED intervals to minimize edge requests
     const intervals = [
-      setInterval(() => fetchEndpoint(eqUrl, eqTransform, undefined, { skipWhenHidden: true }), 900000),  // 15 min (was 5)
       setInterval(() => fetchEndpoint('/api/news', undefined, undefined, { skipWhenHidden: true }), 1800000),        // 30 min (was 10)
       setInterval(() => fetchEndpoint('/api/markets', d => ({ markets: d }), undefined, { skipWhenHidden: true }), 900000), // 15 min (was 5)
     ];
@@ -742,11 +740,6 @@ export default function Dashboard() {
       fetchEndpoint('/api/satellites', d => ({ ...d, satellites_at: d.timestamp }));
       layerFetchedRef.current.add('satellites');
     }
-    // Fires
-    if (activeLayers.fires && !layerFetchedRef.current.has('fires')) {
-      fetchEndpoint('/api/fires');
-      layerFetchedRef.current.add('fires');
-    }
     // GPS/GNSS jamming (gpsjam.org daily H3 grid)
     if (activeLayers.gps_jamming && !layerFetchedRef.current.has('gps_jamming')) {
       fetchEndpoint('/api/gps-jamming', d => ({ gps_jamming: d.cells }));
@@ -782,20 +775,10 @@ export default function Dashboard() {
       fetchEndpoint('/api/balloons', d => ({ balloons: d.balloons }));
       layerFetchedRef.current.add('balloons');
     }
-    // Radiation
-    if (activeLayers.radiation && !layerFetchedRef.current.has('radiation')) {
-      fetchEndpoint('/api/radiation', d => ({ radiation: d.stations }));
-      layerFetchedRef.current.add('radiation');
-    }
     // Live News
     if (activeLayers.live_news && !layerFetchedRef.current.has('live_news')) {
       fetchEndpoint('/api/live-news', d => ({ live_feeds: d.feeds }));
       layerFetchedRef.current.add('live_news');
-    }
-    // Weather
-    if (activeLayers.weather && !layerFetchedRef.current.has('weather')) {
-      fetchEndpoint('/api/weather', d => ({ weather_events: d.events }));
-      layerFetchedRef.current.add('weather');
     }
     // Infrastructure
     if (activeLayers.infrastructure && !layerFetchedRef.current.has('infrastructure')) {
@@ -869,9 +852,6 @@ export default function Dashboard() {
 
     if (activeLayers.balloons) {
       intervals.push(setInterval(() => fetchEndpoint('/api/balloons', d => ({ balloons: d.balloons })), 300000)); // 5m
-    }
-    if (activeLayers.radiation) {
-      intervals.push(setInterval(() => fetchEndpoint('/api/radiation', d => ({ radiation: d.stations })), 300000)); // 5m
     }
     if (activeLayers.maritime) {
       intervals.push(setInterval(() => fetchEndpoint('/api/maritime', d => ({ maritime_ports: d.ports, maritime_chokepoints: d.chokepoints, maritime_ships: d.ships })), 10000)); // 10s

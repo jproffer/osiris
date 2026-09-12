@@ -310,7 +310,7 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
       createDot(map, 'dot-fire', isGhost ? phantomPurple : '#E65100', 10);
       createDot(map, 'dot-cctv', cameraColor, 10);
 
-      const sources = ['flights','military','jets','private-fl','flight-trails','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks', 'gps-jamming', 'piracy', 'power-outages', 'dark-fleet'];
+      const sources = ['flights','military','jets','private-fl','flight-trails','satellites','gdelt','day-night','cctv','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-arcs', 'cyber-heads', 'cyber-impacts', 'gdelt-events', 'cf-outages', 'cf-attacks', 'gps-jamming', 'piracy', 'power-outages', 'dark-fleet'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
 
       // ── FLIGHT ROUTE VISUALIZATION SOURCES & LAYERS ──
@@ -355,22 +355,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
 
       // Day/Night
       map.addLayer({ id: 'day-night-fill', type: 'fill', source: 'day-night', paint: { 'fill-color': isGhost ? '#0D0030' : '#000022', 'fill-opacity': 0.35 }});
-
-      // Earthquakes — amber threat spectrum
-      map.addLayer({ id: 'eq-circles', type: 'circle', source: 'earthquakes', paint: {
-        'circle-radius': ['interpolate',['linear'],['get','magnitude'], 2.5,4, 5,12, 7,24],
-        'circle-color': ['interpolate',['linear'],['get','magnitude'], 2.5,'#F9A825', 4,'#E65100', 6,'#D32F2F'],
-        'circle-opacity': 0.55, 'circle-blur': 0.3, 'circle-stroke-width': 1, 'circle-stroke-color': '#F9A825', 'circle-stroke-opacity': 0.25,
-      }});
-      map.addLayer({ id: 'eq-label', type: 'symbol', source: 'earthquakes', filter: ['>=',['get','magnitude'],4.5], layout: {
-        'text-field': ['concat','M',['to-string',['get','magnitude']]], 'text-size': 9, 'text-font': ['Open Sans Regular'], 'text-offset': [0,1.5],
-      }, paint: { 'text-color': '#F9A825', 'text-halo-color': '#000', 'text-halo-width': 1 }});
-
-      // Fires — burnt sienna
-      map.addLayer({ id: 'fires-heat', type: 'circle', source: 'fires', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,2, 5,4, 10,8],
-        'circle-color': '#E65100', 'circle-opacity': 0.45, 'circle-blur': 0.5,
-      }});
 
       // GPS/GNSS jamming — magenta, intensity scaled by bad-report ratio
       map.addLayer({ id: 'gps-jamming-dots', type: 'circle', source: 'gps-jamming', paint: {
@@ -558,22 +542,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
         'text-offset': [0, 1.6], 'text-allow-overlap': false,
       }, paint: { 'text-color': '#FF6B6B', 'text-halo-color': '#000', 'text-halo-width': 1.5, 'text-opacity': 0.9 }});
 
-      // Weather Events (NASA EONET) — deep violet
-      map.addLayer({ id: 'weather-glow', type: 'circle', source: 'weather', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,12, 5,20, 10,30],
-        'circle-color': '#7E57C2', 'circle-opacity': 0.08, 'circle-blur': 1,
-      }});
-      map.addLayer({ id: 'weather-dots', type: 'circle', source: 'weather', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,5, 5,8, 10,14],
-        'circle-color': ['match', ['get','icon'], 'cyclone','#7E57C2', 'volcano','#D32F2F', '#7E57C2'],
-        'circle-opacity': 0.75,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#7E57C2', 'circle-stroke-opacity': 0.35,
-      }});
-      map.addLayer({ id: 'weather-label', type: 'symbol', source: 'weather', layout: {
-        'text-field': ['get','title'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
-        'text-offset': [0, 2], 'text-max-width': 14, 'text-allow-overlap': false,
-      }, paint: { 'text-color': '#7E57C2', 'text-halo-color': '#000', 'text-halo-width': 1, 'text-opacity': 0.8 }});
-
       // Nuclear Infrastructure — teal / amber risk
       map.addLayer({ id: 'infra-glow', type: 'circle', source: 'infrastructure', paint: {
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,8, 5,14, 10,22],
@@ -744,23 +712,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
         'text-field': ['get','callsign'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
         'text-offset': [0, 1.2], 'text-max-width': 12, 'text-allow-overlap': false,
       }, paint: { 'text-color': ['get', 'color'], 'text-halo-color': '#000', 'text-halo-width': 1 }});
-
-      // Radiation — violet base, threat spectrum for danger/warning
-      map.addLayer({ id: 'rad-glow', type: 'circle', source: 'radiation', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,10, 5,20, 10,40],
-        'circle-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'],
-        'circle-opacity': 0.12, 'circle-blur': 1,
-      }});
-      map.addLayer({ id: 'rad-dots', type: 'circle', source: 'radiation', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,6, 10,8],
-        'circle-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'],
-        'circle-opacity': 0.85,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'], 'circle-stroke-opacity': 0.35,
-      }});
-      map.addLayer({ id: 'rad-label', type: 'symbol', source: 'radiation', minzoom: 5, layout: {
-        'text-field': ['concat', ['to-string', ['get','reading']], ' nSv/h'], 'text-size': 9, 'text-font': ['Open Sans Bold'],
-        'text-offset': [0, 1.5], 'text-allow-overlap': false,
-      }, paint: { 'text-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'], 'text-halo-color': '#000', 'text-halo-width': 1 }});
 
       // ══ OSIRIS SDK — Lattice Intelligence Mesh ══
       // Polybolos Style: Delicate, translucent, steel-blue splined mesh
@@ -995,28 +946,12 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
       map.flyTo({ center: coords, zoom: Math.max(map.getZoom(), 13), duration: 1000 });
     });
 
-    // ── Earthquakes (with USGS link) ──
-    map.on('click', 'eq-circles', e => {
-      if (!e.features?.length) return;
-      const p = e.features[0].properties as any;
-      const coords = (e.features[0].geometry as any).coordinates;
-      popup(coords, `<div style="${pStyle}border:1px solid rgba(255,149,0,0.3);">
-        <div style="color:#FF9500;font-size:14px;font-weight:700;margin-bottom:4px;">M${p.magnitude} EARTHQUAKE</div>
-        <div style="font-size:9px;color:#E8E6E0;margin-bottom:8px;">${htmlEsc(p.place||'Unknown location')}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;">
-          <div><span style="color:#5C5A54;">DEPTH</span><br/><span style="color:#E8E6E0;">${p.depth||'—'}km</span></div>
-          <div><span style="color:#5C5A54;">COORDS</span><br/><span style="color:#E8E6E0;">${coords[1].toFixed(3)}, ${coords[0].toFixed(3)}</span></div>
-        </div>
-        <a href="${p.source === 'NIGGG-BAS' ? 'https://ndc.niggg.bas.bg/' : `https://earthquake.usgs.gov/earthquakes/eventpage/${encodeURIComponent(p.id||'')}`}" target="_blank" style="${linkStyle}color:#FF9500;border:1px solid rgba(255,149,0,0.4);background:rgba(255,149,0,0.1);">📊 ${p.source === 'NIGGG-BAS' ? 'NIGGG-BAS' : 'USGS DETAILS'}</a>
-      </div>`);
-    });
-
     // ── Satellites (SatNOGS powered) ──
     // Layers with their own click handlers. The satellite pick defers to
     // these, and to nothing else — the basemap is not a click target.
-    const CLICKABLE_LAYERS = new Set(['conflict-icons','cctv-dots','eq-circles','fires-heat',
-      'gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots',
-      'balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots',
+    const CLICKABLE_LAYERS = new Set(['conflict-icons','cctv-dots',
+      'gdelt-dots','infra-dots','maritime-dots','choke-dots','news-dots',
+      'balloon-dots','ship-dots','sweep-device-dots','scan-targets-dots',
       'sdk-sea','sdk-air','sdk-intel','malware-dots','cyber-heads','gdelt-events-dots',
       'cf-outage-dots','cf-attack-dots','fl-commercial','fl-military','fl-jets','fl-private',
       'gps-jamming-dots','piracy-dots','power-outages-dots','dark-fleet-dots']);
@@ -1105,21 +1040,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
         if (over) canvas.style.cursor = 'pointer';
         else if (canvas.style.cursor === 'pointer') canvas.style.cursor = '';
       });
-    });
-
-    // ── Fires (with NASA FIRMS link) ──
-    map.on('click', 'fires-heat', e => {
-      if (!e.features?.length) return;
-      const p = e.features[0].properties as any;
-      const coords = (e.features[0].geometry as any).coordinates;
-      popup(coords, `<div style="${pStyle}border:1px solid rgba(255,107,0,0.3);">
-        <div style="color:#FF6B00;font-size:12px;font-weight:700;margin-bottom:6px;">🔥 ACTIVE FIRE DETECTED</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;margin-bottom:8px;">
-          <div><span style="color:#5C5A54;">BRIGHTNESS</span><br/><span style="color:#FF6B00;">${p.brightness||'—'}K</span></div>
-          <div><span style="color:#5C5A54;">COORDS</span><br/><span style="color:#E8E6E0;">${coords[1].toFixed(3)}°, ${coords[0].toFixed(3)}°</span></div>
-        </div>
-        <a href="https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;l:noaa20-viirs,viirs,modis_a,modis_t;@${coords[0]},${coords[1]},10z" target="_blank" style="${linkStyle}color:#FF6B00;border:1px solid rgba(255,107,0,0.4);background:rgba(255,107,0,0.1);">🛰️ NASA FIRMS MAP</a>
-      </div>`);
     });
 
     // ── GPS/GNSS Jamming (gpsjam.org) ──
@@ -1408,7 +1328,7 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
     });
 
     // ── Generic hover for clickables ──
-    ['conflict-icons','cctv-dots','eq-circles','fires-heat','gdelt-dots','weather-dots','infra-dots','maritime-dots','choke-dots','news-dots','balloon-dots','rad-dots','ship-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','malware-dots','cyber-heads','gdelt-events-dots','cf-outage-dots','cf-attack-dots','gps-jamming-dots','piracy-dots','power-outages-dots','dark-fleet-dots'].forEach(layer => {
+    ['conflict-icons','cctv-dots','gdelt-dots','infra-dots','maritime-dots','choke-dots','news-dots','balloon-dots','ship-dots','sweep-device-dots','scan-targets-dots','sdk-sea','sdk-sea-glow','sdk-sea-atmo','sdk-air','sdk-air-glow','sdk-air-atmo','sdk-intel','sdk-intel-glow','sdk-intel-atmo','malware-dots','cyber-heads','gdelt-events-dots','cf-outage-dots','cf-attack-dots','gps-jamming-dots','piracy-dots','power-outages-dots','dark-fleet-dots'].forEach(layer => {
       map.on('mouseenter', layer, () => { map.getCanvas().style.cursor = 'pointer'; });
       map.on('mouseleave', layer, () => { map.getCanvas().style.cursor = ''; });
     });
@@ -1492,23 +1412,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
       </div>`);
     });
 
-    // ── Radiation ──
-    map.on('click', 'rad-dots', e => {
-      if (!e.features?.length) return;
-      const p = e.features[0].properties as any;
-      const coords = (e.features[0].geometry as any).coordinates;
-      const color = p.status === 'DANGER' ? '#FF1744' : p.status === 'WARNING' ? '#FF9500' : '#AB47BC';
-      popup(coords, `<div style="${pStyle}border:1px solid ${color}40;">
-        <div style="color:${color};font-size:12px;font-weight:700;margin-bottom:4px;">☢️ ${p.name}</div>
-        <div style="font-size:9px;color:#aaa;margin-bottom:8px;">${p.city}, ${p.country}</div>
-        <div style="display:grid;grid-template-columns:1fr;gap:4px;font-size:11px;">
-          <div><span style="color:#5C5A54;font-size:9px;">READING</span><br/><span style="color:${color};font-weight:bold;">${p.reading} nSv/h</span></div>
-          <div><span style="color:#5C5A54;font-size:9px;">STATUS</span><br/><span style="color:${color};">${p.status}</span></div>
-          <div><span style="color:#5C5A54;font-size:9px;">NETWORK</span><br/><span style="color:#E8E6E0;">${p.network}</span></div>
-        </div>
-      </div>`);
-    });
-
     // ── Maritime Ships ──
     map.on('click', 'ship-dots', e => {
       if (!e.features?.length) return;
@@ -1531,25 +1434,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
         </div>
         <div><span style="color:#5C5A54;font-size:9px;">DESTINATION: </span><span style="color:#E8E6E0;font-size:9px;">${p.destination || 'UNKNOWN'}</span></div>
         <a href="https://www.marinetraffic.com/en/ais/details/ships/mmsi:${p.mmsi}" target="_blank" style="${linkStyle}flex:1;text-align:center;color:${color};border:1px solid ${color}40;background:${color}15;display:inline-block;width:100%;box-sizing:border-box;margin-top:4px;">[ OPEN SOURCE ↗ ]</a>
-      </div>`);
-    });
-
-    // ── Weather Events (NASA EONET + NOAA/NWS + GDACS) ──
-    map.on('click', 'weather-dots', e => {
-      if (!e.features?.length) return;
-      const p = e.features[0].properties as any;
-      const coords = (e.features[0].geometry as any).coordinates;
-      const iconEmoji = p.icon === 'cyclone' ? '🌀' : p.icon === 'volcano' ? '🌋' : p.icon === 'flood' ? '🌊' : p.icon === 'drought' ? '🏜️' : p.icon === 'ice' ? '🧊' : p.icon === 'weather' ? '⚠️' : '⚡';
-      popup(coords, `<div style="${pStyle}border:1px solid rgba(224,64,251,0.3);">
-        <div style="color:#E040FB;font-size:14px;font-weight:700;margin-bottom:6px;">${iconEmoji} ${p.type || 'Weather Event'}</div>
-        <div style="font-size:10px;color:#E8E6E0;margin-bottom:8px;line-height:1.4;">${p.title || 'Unknown event'}</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:9px;margin-bottom:8px;">
-          <div><span style="color:#5C5A54;">SEVERITY</span><br/><span style="color:${p.severity === 'high' ? '#FF1744' : '#FFD700'};">${(p.severity||'low').toUpperCase()}</span></div>
-          <div><span style="color:#5C5A54;">COORDS</span><br/><span style="color:#E8E6E0;">${coords[1].toFixed(3)}°, ${coords[0].toFixed(3)}°</span></div>
-        </div>
-        <div style="display:flex;gap:6px;">
-          ${p.source ? `<a href="${p.source}" target="_blank" style="${linkStyle}color:#E040FB;border:1px solid rgba(224,64,251,0.4);background:rgba(224,64,251,0.1);">📡 SOURCE</a>` : ''}
-        </div>
       </div>`);
     });
 
@@ -1632,6 +1516,21 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
 
   const engineRef = useRef<LayerEngine | null>(null);
 
+  /* Read fresh in the mount effect below without adding activeLayers/data to
+     its deps -- that would tear down and rebuild the engine (and every
+     source/layer on the map) on every single toggle or poll tick, instead of
+     the cheap setActive()/setData() the dedicated effects below already do
+     for that. Updated from an effect, not during render, so this stays a
+     plain read-latest-value ref rather than a render-phase mutation; it runs
+     on every render (no deps array) and, being declared first, always lands
+     before the engine-construction effect below within the same commit. */
+  const activeLayersRef = useRef(activeLayers);
+  const dataRef = useRef(data);
+  useEffect(() => {
+    activeLayersRef.current = activeLayers;
+    dataRef.current = data;
+  });
+
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
     const map = mapRef.current;
@@ -1652,6 +1551,29 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
     });
     engine.mount(manifests);
     engine.attach();
+    /* The dedicated "push activation" effect below only fires again when
+       activeLayers or manifests change identity. If this effect's own
+       deps (mapReady, manifests, onEntityClick) are what changed instead --
+       e.g. mapReady flips true after activeLayers has already settled --
+       that effect does not rerun, and a freshly mounted engine is left with
+       every layer at its added-hidden default until something else happens
+       to toggle a layer. Seed it here so a fresh mount always reflects
+       whatever is active right now. */
+    engine.setActive(
+      new Set(Object.entries(activeLayersRef.current).filter(([, on]) => on).map(([k]) => k)),
+    );
+    /* Same hazard as above, for data: the "push data" effect below only
+       reruns when `data` or `manifests` changes identity again later. If a
+       manifest's own fetch already resolved and wrote its rows before this
+       engine existed, and nothing else happens to touch `data` again soon
+       (earthquakes polls every 15 minutes), the newly mounted engine would
+       sit there empty despite the panel already showing a nonzero count. */
+    for (const m of manifests) {
+      for (const d of m.datasets) {
+        const rows = dataRef.current[`${m.id}.${d.key}`];
+        if (Array.isArray(rows)) engine.setData(m.id, d.key, rows);
+      }
+    }
     engineRef.current = engine;
 
     /* A style reload discards every source and layer, so remount and re-push. */
@@ -1865,11 +1787,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
     }, [mapReady, palette.cctv]);
 
   // ── DECOUPLED LAYER RENDERERS (Performance Optimized) ──
-
-  useEffect(() => {
-    if (!mapReady) return;
-    setGeo('earthquakes', activeLayers.earthquakes && data.earthquakes ? data.earthquakes.map((eq: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [eq.lng, eq.lat] }, properties: { id: eq.id, magnitude: eq.magnitude, place: eq.place, depth: eq.depth, source: eq.source } })) : []);
-  }, [mapReady, data.earthquakes, activeLayers.earthquakes, setGeo]);
 
   /** Catalogue rows -> the packed form the 3D layer draws. */
   const toSatPoints = useCallback((rows: SatelliteRow[]): SatPoint[] => rows.map((s) => ({
@@ -2167,11 +2084,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
 
   useEffect(() => {
     if (!mapReady) return;
-    setGeo('fires', activeLayers.fires && data.fires ? data.fires.map((f: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [f.lng, f.lat] }, properties: { brightness: f.brightness } })) : []);
-  }, [mapReady, data.fires, activeLayers.fires, setGeo]);
-
-  useEffect(() => {
-    if (!mapReady) return;
     setGeo('gps-jamming', activeLayers.gps_jamming && data.gps_jamming ? data.gps_jamming.map((c: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [c.lng, c.lat] }, properties: { badRatio: c.badRatio, goodAircraft: c.goodAircraft, badAircraft: c.badAircraft } })) : []);
   }, [mapReady, data.gps_jamming, activeLayers.gps_jamming, setGeo]);
 
@@ -2192,11 +2104,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
 
   useEffect(() => {
     if (!mapReady) return;
-    setGeo('weather', activeLayers.weather && data.weather_events ? data.weather_events.map((w: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [w.lng, w.lat] }, properties: { title: w.title, type: w.type, icon: w.icon, severity: w.severity, source: w.source, id: w.id } })) : []);
-  }, [mapReady, data.weather_events, activeLayers.weather, setGeo]);
-
-  useEffect(() => {
-    if (!mapReady) return;
     setGeo('infrastructure', activeLayers.infrastructure && data.infrastructure ? data.infrastructure.map((i: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [i.lng, i.lat] }, properties: { name: i.name, city: i.city, country: i.country, status: i.status, reactors: i.reactors, capacityMW: i.capacityMW, owner: i.owner } })) : []);
   }, [mapReady, data.infrastructure, activeLayers.infrastructure, setGeo]);
 
@@ -2211,11 +2118,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
     if (!mapReady) return;
     setGeo('balloons', activeLayers.balloons && data.balloons ? data.balloons.map((b: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [b.lng, b.lat] }, properties: { callsign: b.callsign, type: b.type, status: b.status, altitude: b.altitude, speed: b.speed, verticalRate: b.verticalRate, temperature: b.temperature, color: b.color } })) : []);
   }, [mapReady, data.balloons, activeLayers.balloons, setGeo]);
-
-  useEffect(() => {
-    if (!mapReady) return;
-    setGeo('radiation', activeLayers.radiation && data.radiation ? data.radiation.map((r: any) => ({ type: 'Feature', geometry: { type: 'Point', coordinates: [r.lng, r.lat] }, properties: { name: r.name, city: r.city, country: r.country, reading: r.reading, status: r.status, network: r.network } })) : []);
-  }, [mapReady, data.radiation, activeLayers.radiation, setGeo]);
 
   // ══ OSIRIS SDK — Lattice Sensor Mesh ══
   // Uses real submarine cable data for SEA domain, curated routes for AIR/INTEL
@@ -2330,7 +2232,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
   // Visibility
   useEffect(() => {
     if (!mapReady) return;
-    setVis(['eq-circles','eq-label'], activeLayers.earthquakes);
     const anySat = activeLayers.satellites || (activeLayers as any).sat_comms || (activeLayers as any).sat_military || (activeLayers as any).sat_navigation || (activeLayers as any).sat_earth || (activeLayers as any).sat_science;
     // The circle layers stay hidden whatever the toggles say — the 3D layer
     // is the single representation, and showing both drew every satellite
@@ -2352,12 +2253,10 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
     setVis(['fl-jets'], activeLayers.jets);
     setVis(['fl-military'], activeLayers.military);
     setVis(['cctv-glow','cctv-dots','cctv-label'], activeLayers.cctv);
-    setVis(['fires-heat'], activeLayers.fires);
     setVis(['gps-jamming-dots'], activeLayers.gps_jamming);
     setVis(['piracy-dots'], activeLayers.piracy);
     setVis(['power-outages-dots'], activeLayers.power_outages);
     setVis(['dark-fleet-dots'], activeLayers.dark_fleet);
-    setVis(['weather-glow','weather-dots','weather-label'], activeLayers.weather);
     setVis(['infra-glow','infra-dots','infra-label'], activeLayers.infrastructure);
     setVis(['maritime-glow','maritime-dots','maritime-label'], activeLayers.maritime);
     setVis(['choke-glow','choke-dots','choke-label'], activeLayers.maritime);
@@ -2366,7 +2265,6 @@ function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseC
     setVis(['conflict-icons'], activeLayers.conflict_zones !== false);
 
     setVis(['balloon-dots','balloon-label'], activeLayers.balloons);
-    setVis(['rad-glow','rad-dots','rad-label'], activeLayers.radiation);
     setVis(['sdk-sea','sdk-sea-glow','sdk-sea-atmo'], activeLayers.sdk_sea !== false);
     setVis(['sdk-air','sdk-air-glow','sdk-air-atmo'], activeLayers.sdk_air !== false);
     setVis(['sdk-intel','sdk-intel-glow','sdk-intel-atmo'], activeLayers.sdk_naval !== false);

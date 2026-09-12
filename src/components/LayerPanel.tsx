@@ -111,11 +111,7 @@ const LAYER_GROUPS: LayerGroupDef[] = [
     label: 'HAZARD',
     fullLabel: 'NATURAL HAZARDS',
     icon: CloudLightning,
-    layers: [
-      { key: 'earthquakes', label: 'Earthquakes', dataKey: 'earthquakes' },
-      { key: 'fires', label: 'Active Fires', dataKey: 'fires' },
-      { key: 'weather', label: 'Severe Weather', dataKey: 'weather_events' },
-    ],
+    layers: [],
   },
   {
     label: 'THREAT',
