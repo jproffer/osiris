@@ -27,7 +27,22 @@ describe('executePlan', () => {
     const write = vi.fn();
     const fetchJson = vi.fn().mockResolvedValue({ datasets: { default: { type: 'FeatureCollection', features } } });
     await executePlan(plan, [fires], { fetchJson, write });
-    expect(write).toHaveBeenCalledWith({ 'fires.default': features, fires: features });
+    expect(write).toHaveBeenCalledWith({ 'fires.default': features, fires: [{ a: 1, lat: 2, lng: 1 }] });
+  });
+
+  it('flattens legacy-key rows to the old flat shape while keeping the canonical key as Features', async () => {
+    const feature = {
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [-118.5, 34.2] },
+      properties: { magnitude: 4.2, place: 'Somewhere' },
+    };
+    const write = vi.fn();
+    const fetchJson = vi.fn().mockResolvedValue({ datasets: { default: { type: 'FeatureCollection', features: [feature] } } });
+    await executePlan(plan, [fires], { fetchJson, write });
+    expect(write).toHaveBeenCalledWith({
+      'fires.default': [feature],
+      fires: [{ magnitude: 4.2, place: 'Somewhere', lat: 34.2, lng: -118.5 }],
+    });
   });
 
   it('appends a bbox for a viewport plan', async () => {

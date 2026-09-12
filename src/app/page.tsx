@@ -1037,12 +1037,10 @@ export default function Dashboard() {
     // Events — Earthquakes
     if (data.earthquakes?.length) {
       for (const eq of data.earthquakes) {
-        const lat = eq.geometry?.coordinates?.[1];
-        const lng = eq.geometry?.coordinates?.[0];
-        if (!lat || !lng) continue;
+        if (!eq.lat || !eq.lng) continue;
         sdkEntities.push({
-          type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] },
-          properties: { domain: 'LAND', name: `M${eq.properties?.magnitude} ${eq.properties?.place || ''}`, source: 'USGS' },
+          type: 'Feature', geometry: { type: 'Point', coordinates: [eq.lng, eq.lat] },
+          properties: { domain: 'LAND', name: `M${eq.magnitude} ${eq.place || ''}`, source: 'USGS' },
         });
       }
     }

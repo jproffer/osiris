@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
         layers: registry.manifests.map(m => ({ id: m.id, group: m.group, label: m.label })),
         errors: registry.errors,
       },
-      requests: recent(100),
+      requests: recent(100).map(({ error, ...rest }) => rest),
     },
     { headers: { 'Cache-Control': 'no-store' } },
   );

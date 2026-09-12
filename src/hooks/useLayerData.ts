@@ -5,6 +5,7 @@ import {
   createLoadState, markSettled, markStarted, planLoads, type Viewport,
 } from '@/lib/layers/loader';
 import type { GeoFeature } from '@/lib/layers/types';
+import type { LegacyRow } from '@/lib/layers/execute';
 
 /** Coarse enough that one tick serves every poll cadence the manifests declare. */
 const TICK_MS = 5000;
@@ -14,7 +15,7 @@ export interface UseLayerDataOptions {
   active: ReadonlySet<string>;
   viewport: Viewport | null;
   /** The existing dataRef store -- one re-render per refresh, not per render. */
-  write(patch: Record<string, GeoFeature[]>): void;
+  write(patch: Record<string, GeoFeature[] | LegacyRow[]>): void;
 }
 
 export function useLayerData({ manifests, active, viewport, write }: UseLayerDataOptions): void {
