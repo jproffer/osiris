@@ -1,0 +1,14 @@
+{
+  "properties": {
+    "id": "us7000tgxm",
+    "magnitude": 3.5,
+    "place": "68 km NNE of Cruz Bay, U.S. Virgin Islands",
+    "depth": 35,
+    "url": "https://earthquake.usgs.gov/earthquakes/eventpage/us7000tgxm",
+    "source": "us"
+  },
+  "lngLat": [
+    -64.5799,
+    18.9183
+  ]
+}

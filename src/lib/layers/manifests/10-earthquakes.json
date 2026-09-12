@@ -1,0 +1,83 @@
+{
+  "id": "earthquakes",
+  "label": "Earthquakes",
+  "group": "HAZARD",
+  "order": 10,
+  "defaultOn": true,
+  "datasets": [
+    {
+      "key": "default",
+      "legacyKey": "earthquakes",
+      "source": {
+        "kind": "http",
+        "url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_day.geojson",
+        "format": "json",
+        "arrayPath": "features",
+        "lat": "geometry.coordinates.1",
+        "lng": "geometry.coordinates.0",
+        "properties": {
+          "id": "id",
+          "magnitude": "properties.mag",
+          "place": "properties.place",
+          "depth": "geometry.coordinates.2",
+          "url": "properties.url",
+          "source": "properties.net"
+        },
+        "cacheTtlMs": 900000,
+        "refresh": { "mode": "poll", "intervalMs": 900000 }
+      },
+      "layers": [
+        {
+          "suffix": "circles",
+          "type": "circle",
+          "clickable": true,
+          "paint": {
+            "circle-radius": ["interpolate", ["linear"], ["get", "magnitude"], 2.5, 4, 5, 12, 7, 24],
+            "circle-color": ["interpolate", ["linear"], ["get", "magnitude"], 2.5, "#F9A825", 4, "#E65100", 6, "#D32F2F"],
+            "circle-opacity": 0.55,
+            "circle-blur": 0.3,
+            "circle-stroke-width": 1,
+            "circle-stroke-color": "#F9A825",
+            "circle-stroke-opacity": 0.25
+          }
+        },
+        {
+          "suffix": "label",
+          "type": "symbol",
+          "filter": [">=", ["get", "magnitude"], 4.5],
+          "layout": {
+            "text-field": ["concat", "M", ["to-string", ["get", "magnitude"]]],
+            "text-size": 9,
+            "text-font": ["Open Sans Regular"],
+            "text-offset": [0, 1.5]
+          },
+          "paint": { "text-color": "#F9A825", "text-halo-color": "#000", "text-halo-width": 1 }
+        }
+      ]
+    }
+  ],
+  "interaction": {
+    "kind": "popup",
+    "popup": {
+      "accent": "#FF9500",
+      "title": { "template": "M{magnitude} EARTHQUAKE" },
+      "subtitle": { "property": "place" },
+      "fields": [
+        { "label": "DEPTH", "property": "depth", "format": "number", "suffix": "km" },
+        { "label": "COORDS", "value": { "template": "{$lat3}, {$lng3}" } }
+      ],
+      "links": [
+        {
+          "label": "📊 USGS DETAILS",
+          "url": "https://earthquake.usgs.gov/earthquakes/eventpage/{id}",
+          "when": { "property": "source", "equals": "NIGGG-BAS", "not": true }
+        },
+        {
+          "label": "📊 NIGGG-BAS",
+          "url": "https://ndc.niggg.bas.bg/",
+          "when": { "property": "source", "equals": "NIGGG-BAS" }
+        }
+      ]
+    }
+  }
+}
