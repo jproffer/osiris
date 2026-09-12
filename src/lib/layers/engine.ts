@@ -1,8 +1,9 @@
-import type { GeoFeature, MapLayerSpec, NormalisedManifest, VariantFilter } from './types';
+import type { GeoFeature, MapLayerSpec, NormalisedManifest } from './types';
 import { mapLayerId, sourceId } from './types';
 import type { MapLike } from './maplike';
 import { renderPopup } from './popup';
 import { isDatasetActive } from './loader';
+import { evaluate } from './condition';
 
 /** What a click resolved to -- one kind per owner: popup html, a React panel, or a named adapter. */
 export type Selection =
@@ -31,13 +32,6 @@ function resolveTokens(value: unknown, palette: Record<string, string>): unknown
     return out;
   }
   return value;
-}
-
-function matches(filter: VariantFilter, props: Record<string, unknown>): boolean {
-  const v = props[filter.property];
-  if (filter.in) return filter.in.includes(v);
-  if ('equals' in filter) return v === filter.equals;
-  return true;
 }
 
 export class LayerEngine {
@@ -134,7 +128,7 @@ export class LayerEngine {
 
     const features = this.active.has(m.id) || filters.length === 0
       ? rows
-      : rows.filter(f => filters.some(filter => matches(filter, f.properties ?? {})));
+      : rows.filter(f => filters.some(filter => evaluate(filter, f.properties ?? {})));
 
     this.map.getSource(src)!.setData({ type: 'FeatureCollection', features });
   }

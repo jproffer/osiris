@@ -69,7 +69,18 @@ export interface DatasetSpec {
   legacyKey?: string;
 }
 
-export interface VariantFilter { property: string; equals?: unknown; in?: unknown[] }
+export interface Condition {
+  property: string;
+  exists?: boolean;
+  truthy?: boolean;
+  equals?: unknown;
+  in?: unknown[];
+  /** Inverts the whole condition. */
+  not?: boolean;
+}
+
+/** Kept as an alias so variant filters and popup conditions stay one concept. */
+export type VariantFilter = Condition;
 
 export interface VariantSpec {
   id: string;
