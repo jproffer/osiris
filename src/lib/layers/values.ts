@@ -24,6 +24,13 @@ export function resolveValue(spec: ValueSpec, props: Record<string, unknown>): s
     return Object.prototype.hasOwnProperty.call(cases, asString) ? cases[asString] : fallback;
   }
 
+  if ('template' in spec) {
+    return spec.template.replace(/\{(\$?\w+)\}/g, (_m, key: string) => {
+      const v = props[key];
+      return v === null || v === undefined ? '' : String(v);
+    });
+  }
+
   const { property, stops, fallback } = spec.range;
   const raw = coerce(props[property]);
   // Number(null) is 0 -- without this guard a missing property would be
@@ -35,4 +42,25 @@ export function resolveValue(spec: ValueSpec, props: Record<string, unknown>): s
     if (n >= threshold) return out;
   }
   return fallback;
+}
+
+export interface PopupCtx { lng: number; lat: number }
+
+/**
+ * Popups display coordinates rounded to three decimals but link with full
+ * precision, so both are injected. The $ prefix keeps them clear of a genuine
+ * upstream property named `lat`.
+ */
+export function withCoords(
+  props: Record<string, unknown>,
+  ctx: PopupCtx | undefined,
+): Record<string, unknown> {
+  if (!ctx) return props;
+  return {
+    ...props,
+    $lng: ctx.lng,
+    $lat: ctx.lat,
+    $lng3: ctx.lng.toFixed(3),
+    $lat3: ctx.lat.toFixed(3),
+  };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveValue } from './values';
+import { resolveValue, withCoords } from './values';
 
 describe('resolveValue', () => {
   it('returns a literal unchanged', () => {
@@ -49,5 +49,44 @@ describe('resolveValue', () => {
   it('falls back rather than treating a null range property as zero', () => {
     const spec = { range: { property: 'a', stops: [[0, '#RED']] as [number, string][], fallback: '#GREY' } };
     expect(resolveValue(spec, { a: null })).toBe('#GREY');
+  });
+});
+
+describe('template values', () => {
+  it('interpolates properties', () => {
+    expect(resolveValue({ template: 'M{magnitude} EARTHQUAKE' }, { magnitude: 6.1 }))
+      .toBe('M6.1 EARTHQUAKE');
+  });
+
+  it('renders a missing property as empty rather than undefined', () => {
+    expect(resolveValue({ template: '{a}/{b}' }, { a: 'x' })).toBe('x/');
+  });
+
+  it('leaves unmatched braces alone', () => {
+    expect(resolveValue({ template: '{a} {not a token}' }, { a: 'x' })).toBe('x {not a token}');
+  });
+});
+
+describe('withCoords', () => {
+  it('injects full and three-decimal coordinates', () => {
+    const p = withCoords({ place: 'Off Honshu' }, { lng: 142.369, lat: 38.2971234 });
+    expect(p.$lng).toBe(142.369);
+    expect(p.$lat).toBe(38.2971234);
+    expect(p.$lat3).toBe('38.297');
+    expect(p.$lng3).toBe('142.369');
+    expect(p.place).toBe('Off Honshu');
+  });
+
+  // Popups display three decimals but links need full precision -- one
+  // pseudo-property cannot serve both, so there are four.
+  it('is a no-op without a context', () => {
+    const props = { place: 'x' };
+    expect(withCoords(props, undefined)).toBe(props);
+  });
+
+  it('lets a real property named lat survive alongside $lat', () => {
+    const p = withCoords({ lat: 'not a number' }, { lng: 1, lat: 2 });
+    expect(p.lat).toBe('not a number');
+    expect(p.$lat).toBe(2);
   });
 });

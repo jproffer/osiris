@@ -9,6 +9,7 @@ export type ValueSpec =
   | string
   | { property: string }
   | { match: { property: string; cases: Record<string, string>; fallback: string; mode?: 'equals' | 'contains' } }
+  | { template: string }
   | { range: { property: string; stops: [number, string][]; fallback: string } };
 
 export interface PopupFieldSpec { label: string; property: string; format?: Format; suffix?: string }
