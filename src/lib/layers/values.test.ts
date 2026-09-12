@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveValue, withCoords } from './values';
+import { resolveValue, withCoords, resolveColor } from './values';
 
 describe('resolveValue', () => {
   it('returns a literal unchanged', () => {
@@ -88,5 +88,31 @@ describe('withCoords', () => {
     const p = withCoords({ lat: 'not a number' }, { lng: 1, lat: 2 });
     expect(p.lat).toBe('not a number');
     expect(p.$lat).toBe(2);
+  });
+});
+
+describe('resolveColor', () => {
+  it('accepts hex colours in every legal length', () => {
+    for (const c of ['#fff', '#ffff', '#FF9500', '#FF9500CC']) {
+      expect(resolveColor(c, {})).toBe(c);
+    }
+  });
+
+  it('resolves a derived colour', () => {
+    const spec = { range: { property: 'value', stops: [[350, '#D32F2F'], [100, '#E65100']] as [number, string][], fallback: '#7E57C2' } };
+    expect(resolveColor(spec, { value: 400 })).toBe('#D32F2F');
+    expect(resolveColor(spec, { value: 1 })).toBe('#7E57C2');
+  });
+
+  // The real reason this exists: a template can put an upstream string into a
+  // style attribute, and escaping alone would not stop CSS injection.
+  it('rejects anything that is not a hex colour', () => {
+    expect(resolveColor({ template: '{evil}' }, { evil: 'red;background:url(//x)' })).toBe('#9B978E');
+    expect(resolveColor({ template: '{evil}' }, { evil: 'javascript:alert(1)' })).toBe('#9B978E');
+    expect(resolveColor('rebeccapurple', {})).toBe('#9B978E');
+  });
+
+  it('falls back to the caller-supplied colour', () => {
+    expect(resolveColor('nonsense', {}, '#FF9500')).toBe('#FF9500');
   });
 });

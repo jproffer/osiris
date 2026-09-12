@@ -44,6 +44,18 @@ export function resolveValue(spec: ValueSpec, props: Record<string, unknown>): s
   return fallback;
 }
 
+const HEX_COLOUR = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/** Colours reach a style attribute, where escaping alone does not stop CSS injection. */
+export function resolveColor(
+  spec: ValueSpec,
+  props: Record<string, unknown>,
+  fallback = '#9B978E',
+): string {
+  const v = resolveValue(spec, props);
+  return HEX_COLOUR.test(v) ? v : fallback;
+}
+
 export interface PopupCtx { lng: number; lat: number }
 
 /**
