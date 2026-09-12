@@ -57,3 +57,30 @@ describe('earthquakes popup parity', () => {
     expect(html).toMatchSnapshot();
   });
 });
+
+describe('fires popup parity', () => {
+  const html = render('20-fires.json', 'fires');
+  const fixture = loadFixture('fires');
+
+  it('shows every label the old popup showed', () => {
+    for (const label of ['BRIGHTNESS', 'COORDS']) expect(html).toContain(label);
+  });
+
+  it('keeps the fire glyph and heading', () => {
+    expect(html).toContain('🔥');
+    expect(html).toContain('ACTIVE FIRE DETECTED');
+  });
+
+  it('shows brightness in kelvin', () => {
+    expect(html).toContain(`${fixture.properties.brightness}K`);
+  });
+
+  it('builds the FIRMS deep link at full coordinate precision', () => {
+    expect(html).toContain('firms.modaps.eosdis.nasa.gov');
+    expect(html).toContain(String(fixture.lngLat[0]));
+  });
+
+  it('matches its recorded shape', () => {
+    expect(html).toMatchSnapshot();
+  });
+});

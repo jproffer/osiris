@@ -1,0 +1,54 @@
+{
+  "id": "fires",
+  "label": "Active Fires",
+  "group": "HAZARD",
+  "order": 20,
+  "datasets": [
+    {
+      "key": "default",
+      "legacyKey": "fires",
+      "source": {
+        "kind": "http",
+        "url": "/api/fires",
+        "format": "json",
+        "arrayPath": "fires",
+        "lat": "lat",
+        "lng": "lng",
+        "properties": { "brightness": "brightness" },
+        "cacheTtlMs": 900000,
+        "refresh": { "mode": "once" }
+      },
+      "layers": [
+        {
+          "suffix": "heat",
+          "type": "circle",
+          "clickable": true,
+          "paint": {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 2, 5, 4, 10, 8],
+            "circle-color": "#E65100",
+            "circle-opacity": 0.45,
+            "circle-blur": 0.5
+          }
+        }
+      ]
+    }
+  ],
+  "interaction": {
+    "kind": "popup",
+    "popup": {
+      "accent": "#FF6B00",
+      "glyph": "🔥",
+      "title": "ACTIVE FIRE DETECTED",
+      "fields": [
+        { "label": "BRIGHTNESS", "property": "brightness", "format": "number", "suffix": "K" },
+        { "label": "COORDS", "value": { "template": "{$lat3}, {$lng3}" } }
+      ],
+      "links": [
+        {
+          "label": "🛰️ NASA FIRMS MAP",
+          "url": "https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs;l:noaa20-viirs,viirs,modis_a,modis_t;@{$lng},{$lat},10z"
+        }
+      ]
+    }
+  }
+}
