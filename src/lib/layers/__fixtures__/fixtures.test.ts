@@ -113,3 +113,31 @@ describe('weather popup parity', () => {
     expect(html).toMatchSnapshot();
   });
 });
+
+describe('radiation popup parity', () => {
+  const html = render('40-radiation.json', 'radiation');
+  const fixture = loadFixture('radiation');
+
+  it('shows every label', () => {
+    for (const label of ['READING', 'CAPTURED']) expect(html).toContain(label);
+  });
+
+  it('shows the reading in cpm', () => {
+    expect(html).toContain(`${fixture.properties.value} cpm`);
+  });
+
+  it('keeps the radiation glyph', () => {
+    expect(html).toContain('☢️');
+  });
+
+  it('bands the accent by reading', () => {
+    const spec = { accent: { range: { property: 'value', stops: [[350, '#D32F2F'], [100, '#E65100']] as [number, string][], fallback: '#7E57C2' } }, title: 'x', fields: [] };
+    expect(renderPopup(spec, { value: 400 })).toContain('#D32F2F');
+    expect(renderPopup(spec, { value: 150 })).toContain('#E65100');
+    expect(renderPopup(spec, { value: 5 })).toContain('#7E57C2');
+  });
+
+  it('matches its recorded shape', () => {
+    expect(html).toMatchSnapshot();
+  });
+});

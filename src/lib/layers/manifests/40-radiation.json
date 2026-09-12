@@ -1,0 +1,79 @@
+{
+  "id": "radiation",
+  "label": "Radiation Monitors",
+  "group": "HAZARD",
+  "order": 40,
+  "datasets": [
+    {
+      "key": "default",
+      "legacyKey": "radiation",
+      "source": {
+        "kind": "http",
+        "url": "https://api.safecast.org/measurements.json?since={today-1d}&limit=2000&unit=cpm",
+        "format": "json",
+        "lat": "latitude",
+        "lng": "longitude",
+        "properties": {
+          "value": "value", "unit": "unit", "captured": "captured_at",
+          "device": "device_id", "place": "location_name"
+        },
+        "cacheTtlMs": 900000,
+        "refresh": { "mode": "poll", "intervalMs": 900000 }
+      },
+      "layers": [
+        {
+          "suffix": "glow",
+          "type": "circle",
+          "paint": {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 10, 5, 20, 10, 40],
+            "circle-color": "#7E57C2", "circle-opacity": 0.12, "circle-blur": 1
+          }
+        },
+        {
+          "suffix": "dots",
+          "type": "circle",
+          "clickable": true,
+          "paint": {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 4, 5, 6, 10, 8],
+            "circle-color": ["interpolate", ["linear"], ["get", "value"], 0, "#7E57C2", 100, "#E65100", 350, "#D32F2F"],
+            "circle-opacity": 0.85
+          }
+        },
+        {
+          "suffix": "label",
+          "type": "symbol",
+          "minzoom": 5,
+          "layout": {
+            "text-field": ["get", "place"], "text-size": 8,
+            "text-font": ["Open Sans Regular"], "text-offset": [0, 1.4]
+          },
+          "paint": { "text-color": "#7E57C2", "text-halo-color": "#000", "text-halo-width": 1 }
+        }
+      ]
+    }
+  ],
+  "interaction": {
+    "kind": "popup",
+    "popup": {
+      "accent": {
+        "range": {
+          "property": "value",
+          "stops": [[350, "#D32F2F"], [100, "#E65100"]],
+          "fallback": "#7E57C2"
+        }
+      },
+      "glyph": "☢️",
+      "columns": 1,
+      "title": { "property": "place" },
+      "badge": {
+        "value": { "range": { "property": "value", "stops": [[350, "DANGER"], [100, "WARNING"]], "fallback": "NORMAL" } },
+        "color": { "range": { "property": "value", "stops": [[350, "#D32F2F"], [100, "#E65100"]], "fallback": "#7E57C2" } }
+      },
+      "fields": [
+        { "label": "READING", "property": "value", "format": "number", "suffix": " cpm" },
+        { "label": "CAPTURED", "property": "captured", "format": "datetime" },
+        { "label": "DEVICE", "property": "device", "format": "text" }
+      ]
+    }
+  }
+}

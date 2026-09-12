@@ -1,0 +1,13 @@
+{
+  "properties": {
+    "value": 18,
+    "unit": "cpm",
+    "captured": "2026-09-10T23:59:04.000Z",
+    "device": 108,
+    "place": "Bad Pyrmont, DE"
+  },
+  "lngLat": [
+    9.2345,
+    51.9807
+  ]
+}
