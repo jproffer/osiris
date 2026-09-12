@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 import { loadRegistry, reloadRegistry } from '@/lib/layers/registry';
-import { serveDatasets } from '@/lib/layers/serve';
+import { serveDatasets, selfOriginHost } from '@/lib/layers/serve';
 import { ADAPTERS } from '@/lib/layers/adapters';
 import { readConfigValue } from '@/lib/layers/config-store';
 import { safeFetch, getClientIp, isRateLimited } from '@/lib/ssrf-guard';
@@ -20,7 +20,7 @@ function textFetcher(url: string, headers: Record<string, string>, ttlMs: number
   let fetcher = fetchers.get(key);
   if (!fetcher) {
     fetcher = cachedSource<string>(key, async () => {
-      const res = await safeFetch(url, { headers, signal: AbortSignal.timeout(20000) });
+      const res = await safeFetch(url, { headers, signal: AbortSignal.timeout(20000), allowHost: selfOriginHost() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return [await res.text()];
     }, ttlMs);

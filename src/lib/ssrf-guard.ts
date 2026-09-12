@@ -115,9 +115,17 @@ export interface ValidationResult {
  * range, the IP literal uses a non-canonical form, or any resolved A/AAAA
  * answer lands in a blocked range.
  */
-export async function validateHost(host: string): Promise<ValidationResult> {
+export async function validateHost(host: string, opts?: { allowHost?: string }): Promise<ValidationResult> {
   const trimmed = host.trim();
   if (!trimmed) return { ok: false, reason: 'empty host' };
+
+  // An operator-configured self-origin is not attacker input -- it is the
+  // exact value OSIRIS_SELF_ORIGIN was set to -- so it bypasses the reserved-
+  // range checks below. Every other caller never passes this option, so their
+  // behaviour is unchanged.
+  if (opts?.allowHost && trimmed.toLowerCase() === opts.allowHost.toLowerCase()) {
+    return { ok: true, resolved: [trimmed] };
+  }
 
   // Strip brackets for IPv6 literals like [::1]
   const bracketed = trimmed.replace(/^\[|\]$/g, '');
@@ -183,13 +191,14 @@ export async function validateHost(host: string): Promise<ValidationResult> {
  */
 export async function safeFetch(
   inputUrl: string,
-  init: RequestInit & { maxRedirects?: number } = {},
+  init: RequestInit & { maxRedirects?: number; allowHost?: string } = {},
 ): Promise<Response> {
   const maxRedirects = init.maxRedirects ?? 3;
   // Spread into a new init we mutate, then explicitly drop our extra prop
   // so it isn't passed through to fetch().
-  const passInit: RequestInit & { maxRedirects?: number } = { ...init };
+  const passInit: RequestInit & { maxRedirects?: number; allowHost?: string } = { ...init };
   delete passInit.maxRedirects;
+  delete passInit.allowHost;
   let currentUrl = inputUrl;
   for (let i = 0; i <= maxRedirects; i++) {
     let parsed: URL;
@@ -197,7 +206,7 @@ export async function safeFetch(
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
       throw new Error(`safeFetch: blocked protocol ${parsed.protocol}`);
     }
-    const check = await validateHost(parsed.hostname);
+    const check = await validateHost(parsed.hostname, { allowHost: init.allowHost });
     if (!check.ok) {
       throw new Error(`safeFetch: blocked target — ${check.reason}`);
     }

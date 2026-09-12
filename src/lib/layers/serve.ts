@@ -14,6 +14,11 @@ export function resolveSelfOrigin(url: string): string {
   return `${origin}${url}`;
 }
 
+/** Just the hostname `resolveSelfOrigin` resolves to, for passing to safeFetch's allowHost. */
+export function selfOriginHost(): string {
+  return new URL(resolveSelfOrigin('/')).hostname;
+}
+
 export interface ServeDeps {
   /** Fetches an upstream URL. The route supplies safeFetch wrapped in cachedSource. */
   fetchText(url: string, headers: Record<string, string>, ttlMs: number): Promise<string>;

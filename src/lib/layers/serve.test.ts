@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { serveDatasets, resolveSelfOrigin } from './serve';
+import { serveDatasets, resolveSelfOrigin, selfOriginHost } from './serve';
 import type { NormalisedManifest, SourceSpec } from './types';
 import type { ServeDeps } from './serve';
 
@@ -163,6 +163,23 @@ describe('resolveSelfOrigin', () => {
     process.env.OSIRIS_SELF_ORIGIN = 'http://osiris:3000/';
     try {
       expect(resolveSelfOrigin('/api/fires')).toBe('http://osiris:3000/api/fires');
+    } finally {
+      if (prev === undefined) delete process.env.OSIRIS_SELF_ORIGIN;
+      else process.env.OSIRIS_SELF_ORIGIN = prev;
+    }
+  });
+});
+
+describe('selfOriginHost', () => {
+  it('extracts just the hostname from the default self-origin', () => {
+    expect(selfOriginHost()).toBe('127.0.0.1');
+  });
+
+  it('honours OSIRIS_SELF_ORIGIN', () => {
+    const prev = process.env.OSIRIS_SELF_ORIGIN;
+    process.env.OSIRIS_SELF_ORIGIN = 'http://osiris.internal:4000';
+    try {
+      expect(selfOriginHost()).toBe('osiris.internal');
     } finally {
       if (prev === undefined) delete process.env.OSIRIS_SELF_ORIGIN;
       else process.env.OSIRIS_SELF_ORIGIN = prev;
