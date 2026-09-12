@@ -413,6 +413,7 @@ handlers need:
 | Conditional fields | `cf-outage` renders `description` and `Ended` only when present | `when` (§4.2) |
 | Conditional links | `conflict-icons` renders its source link only when a URL exists | `when` |
 | Derived field *values* | `cyber-heads` shows `CRITICAL`/`HIGH`/`MEDIUM` from a numeric severity | `value: ValueSpec` |
+| A status pill beside the title | `cyber-heads`' severity badge | `badge` hint (§4.3) |
 | Coordinates | `fires`, `gdelt-dots`, `conflict-icons` print the clicked lat/lng | `$lat`/`$lng` |
 | Coordinates in links | `fires` builds a FIRMS deep link containing them | `$lat`/`$lng` + `template` |
 | Per-field colour | `balloons` colours vertical rate by sign | `color: ValueSpec` |
@@ -460,10 +461,17 @@ interface PopupSpec {
   glyph?: string;                                        // NEW — leading character
   columns?: 1 | 2;                                       // NEW — default 2
   body?: { value: ValueSpec; maxHeight?: number };       // NEW — scrollable prose block
+  badge?: { value: ValueSpec; color?: ValueSpec;         // NEW — pill beside the title
+            when?: Condition };
   fields: PopupFieldSpec[];
   links?: PopupLinkSpec[];
 }
 ```
+
+The `badge` renders as a pill on the title row, right-aligned against the title, above the
+divider — the shape `cyber-heads` uses today for its severity. `color` defaults to the popup's
+`accent` and routes through `resolveColor` (§4.5) like every other colour slot; `when` lets a
+badge be conditional, so a layer can show one only for the states that warrant it.
 
 `renderPopup` gains a third argument: `renderPopup(spec, props, ctx)` where
 `ctx = { lng, lat }`. The engine already holds `lngLat` at dispatch, so this is a parameter
@@ -471,14 +479,29 @@ change, not new plumbing. `$lat` and `$lng` are injected as pseudo-properties wh
 property is read — fields, conditions and templates alike. The `$` prefix avoids collision with
 a genuine upstream property named `lat`.
 
-### 4.3 What was deliberately left out
+### 4.3 The `badge` hint — rejected on review, then reinstated
 
-**A `badge` hint was considered and rejected.** Only `cyber-heads` has a pill-styled severity
-badge. One consumer does not justify a schema concept, so its severity renders as an ordinary
-field whose value comes from a `range` ValueSpec and whose colour comes from `color` — the
-information survives; the pill styling does not. This is the same discipline the Plan 1 spec
-applied to date tokens: a closed, enumerated set, extended only when a second real consumer
-appears.
+`badge` was initially left out on a YAGNI argument: only `cyber-heads` has a pill-styled
+severity badge today, and one consumer does not normally justify a schema concept. The proposal
+was to render its severity as an ordinary coloured field, preserving the information and losing
+the pill.
+
+**That was overruled on review and `badge` is in the schema.** The reasoning that carried:
+
+- The count of *current* consumers is the wrong measure for a presentational vocabulary whose
+  whole purpose is to let future drop-in manifests look like first-class layers. A severity or
+  status pill is a generic idea, not a `cyber_attacks` idiosyncrasy, and a plugin author reaching
+  for one should not have to write an adapter to get it.
+- It costs almost nothing. `badge` reuses `ValueSpec`, `Condition` and `resolveColor` — every
+  piece already exists for other hints — so it adds one optional key and a few lines in
+  `renderPopup`, not a new mechanism.
+- Leaving it out would have made `cyber_attacks` the one migrated layer that visibly lost
+  something, which weakens the parity claim the fixtures in §8.1 exist to support.
+
+The discipline the Plan 1 spec applied to date tokens still holds — a closed, enumerated set —
+and `badge` is now a member of that set. What remains excluded is arbitrary HTML or CSS in a
+manifest: every presentational hint is a named key the renderer understands, so escaping and
+colour validation stay structural.
 
 ### 4.4 Arithmetic belongs upstream, not in the popup
 
@@ -860,7 +883,8 @@ Run against the batch's panel group after deploying it:
   start/stop/cleanup; renderer forwarding and hit-test ordering; the `ClientManifest` narrowing.
 - **`popup.ts`**: each new spec feature — `when` with `exists`/`truthy` against MapLibre's
   string-coerced booleans, `template` with `$lat`/`$lng`, per-field colour, `resolveColor`
-  rejecting a non-hex value, and the `glyph`/`columns`/`body` hints.
+  rejecting a non-hex value, and the `glyph`/`columns`/`body`/`badge` hints — `badge` covering
+  its default-to-accent colour and its conditional `when`.
 - **`validate.ts`**: `tiles` spec validation, the `order` field, `dependsOn` naming an unknown
   layer, and `sourceLayer` on a non-tile source.
 
