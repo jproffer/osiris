@@ -6,6 +6,7 @@ import { ADAPTERS } from '@/lib/layers/adapters';
 import { readConfigValue } from '@/lib/layers/config-store';
 import { safeFetch, getClientIp, isRateLimited } from '@/lib/ssrf-guard';
 import { cachedSource } from '@/lib/sourceCache';
+import { record } from '@/lib/layers/request-log';
 
 /** Browser sends a layer id, never a URL -- stops an open instance being used as a fetch proxy. */
 
@@ -54,6 +55,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  const started = Date.now();
   const result = await serveDatasets(manifest, datasetKeys, bbox, {
     fetchText: async (url, headers, ttlMs) => {
       const [text] = await textFetcher(url, headers, ttlMs)();
@@ -65,15 +67,23 @@ export async function GET(request: NextRequest) {
     adapters: ADAPTERS,
   });
 
-  if (!result.ok) {
-    return NextResponse.json(
-      { error: result.error, ...(result.needsConfig ? { needsConfig: result.needsConfig } : {}) },
-      { status: result.status },
-    );
-  }
+  const body = result.ok
+    ? { datasets: result.datasets }
+    : { error: result.error, ...(result.needsConfig ? { needsConfig: result.needsConfig } : {}) };
+  const json = JSON.stringify(body);
 
-  return NextResponse.json({ datasets: result.datasets }, {
-    headers: { 'Cache-Control': 'no-store' },
+  record({
+    layer: layerId,
+    datasets: datasetKeys,
+    status: result.ok ? 200 : result.status,
+    ms: Date.now() - started,
+    bytes: json.length,
+    ...(result.ok ? {} : { error: result.error }),
+  });
+
+  return new NextResponse(json, {
+    status: result.ok ? 200 : result.status,
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
 }
 
