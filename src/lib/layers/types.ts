@@ -29,6 +29,11 @@ export interface PopupSpec {
   accent: ValueSpec;
   title: ValueSpec;
   subtitle?: ValueSpec;
+  /** Leading character. A ValueSpec because weather picks its emoji per event. */
+  glyph?: ValueSpec;
+  columns?: 1 | 2;
+  body?: { value: ValueSpec; maxHeight?: number };
+  badge?: { value: ValueSpec; color?: ValueSpec; when?: Condition };
   fields: PopupFieldSpec[];
   links?: PopupLinkSpec[];
 }

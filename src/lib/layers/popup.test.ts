@@ -181,4 +181,64 @@ describe('conditional fields and links', () => {
     expect(html).not.toContain('<script>');
     expect(html).toContain('&lt;img');
   });
+
+  describe('presentation hints', () => {
+    const base = { accent: '#FF9500', title: 'FIRE', fields: [] };
+
+    it('prefixes a static glyph', () => {
+      expect(renderPopup({ ...base, glyph: '🔥' }, {})).toContain('🔥');
+    });
+
+    // weather-dots picks its emoji from the event type, so glyph is a ValueSpec.
+    it('derives a glyph from a property', () => {
+      const spec = {
+        ...base,
+        glyph: { match: { property: 'icon', cases: { cyclone: '🌀', volcano: '🌋' }, fallback: '⚡' } },
+      };
+      expect(renderPopup(spec, { icon: 'cyclone' })).toContain('🌀');
+      expect(renderPopup(spec, { icon: 'volcano' })).toContain('🌋');
+      expect(renderPopup(spec, { icon: 'hail' })).toContain('⚡');
+    });
+
+    it('renders one column when asked', () => {
+      expect(renderPopup({ ...base, columns: 1, fields: [{ label: 'A', property: 'a' }] }, { a: 1 }))
+        .toContain('grid-template-columns:1fr;');
+      expect(renderPopup({ ...base, fields: [{ label: 'A', property: 'a' }] }, { a: 1 }))
+        .toContain('grid-template-columns:1fr 1fr;');
+    });
+
+    it('renders a scrollable body', () => {
+      const spec = { ...base, body: { value: { property: 'sitrep' }, maxHeight: 120 } };
+      const html = renderPopup(spec, { sitrep: 'Armed men boarded the vessel.' });
+      expect(html).toContain('Armed men boarded the vessel.');
+      expect(html).toContain('max-height:120px');
+      expect(html).toContain('overflow-y:auto');
+    });
+
+    it('escapes body text', () => {
+      const spec = { ...base, body: { value: { property: 'sitrep' } } };
+      expect(renderPopup(spec, { sitrep: '<script>x</script>' })).not.toContain('<script>');
+    });
+
+    it('renders a badge, defaulting its colour to the accent', () => {
+      const spec = {
+        ...base,
+        badge: { value: { range: { property: 'severity', stops: [[8, 'CRITICAL']] as [number, string][], fallback: 'MEDIUM' } } },
+      };
+      const html = renderPopup(spec, { severity: 9 });
+      expect(html).toContain('CRITICAL');
+      expect(html).toContain('#FF9500');
+    });
+
+    it('colours a badge independently', () => {
+      const spec = { ...base, badge: { value: 'HIGH', color: '#FF1744' } };
+      expect(renderPopup(spec, {})).toContain('#FF1744');
+    });
+
+    it('omits a badge whose condition fails', () => {
+      const spec = { ...base, badge: { value: 'LIVE', when: { property: 'ongoing', truthy: true } } };
+      expect(renderPopup(spec, { ongoing: 'false' })).not.toContain('LIVE');
+      expect(renderPopup(spec, { ongoing: 'true' })).toContain('LIVE');
+    });
+  });
 });
