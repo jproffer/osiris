@@ -21,7 +21,8 @@
           "place": "properties.place",
           "depth": "geometry.coordinates.2",
           "url": "properties.url",
-          "source": "properties.net"
+          "source": "properties.net",
+          "time": "properties.time"
         },
         "cacheTtlMs": 900000,
         "refresh": { "mode": "poll", "intervalMs": 900000 }

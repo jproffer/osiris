@@ -328,6 +328,7 @@ export default function Dashboard() {
 
   const isMobile = useIsMobile();
   const startTime = useRef(Date.now());
+  const urlLayersRef = useRef<string | null>(null);
   const geocodeCache = useRef<Map<string, string>>(new Map());
   const geocodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastGeocodedPos = useRef<{ lat: number; lng: number } | null>(null);
@@ -390,6 +391,7 @@ export default function Dashboard() {
     // Restore active layers from URL if present
     const p = new URLSearchParams(window.location.search);
     const layers = p.get('layers');
+    urlLayersRef.current = layers;
     if (layers) {
       const active = layers.split(',');
       setActiveLayers(prev => {
@@ -435,10 +437,13 @@ export default function Dashboard() {
            initialiser no longer hardcodes. The ?layers= restore above runs
            synchronously at mount and only toggles keys that already exist at
            that moment, so it can never reach an id introduced here — this
-           fetch resolves strictly later. Consult the URL directly instead so
-           a share link naming a manifest-only layer still wins over its
-           defaultOn. */
-        const urlLayers = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('layers') : null;
+           fetch resolves strictly later. Read the ?layers value captured into
+           urlLayersRef at mount time (not a fresh re-parse of
+           window.location.search) so a share link naming a manifest-only
+           layer still wins over its defaultOn even if the debounced
+           URL-persist effect below has already rewritten the URL by the time
+           this fetch resolves. */
+        const urlLayers = urlLayersRef.current;
         const urlActive = urlLayers ? new Set(urlLayers.split(',')) : null;
         setActiveLayers((prev: any) => {
           const next = { ...prev };
@@ -1032,10 +1037,12 @@ export default function Dashboard() {
     // Events — Earthquakes
     if (data.earthquakes?.length) {
       for (const eq of data.earthquakes) {
-        if (!eq.lat || !eq.lng) continue;
+        const lat = eq.geometry?.coordinates?.[1];
+        const lng = eq.geometry?.coordinates?.[0];
+        if (!lat || !lng) continue;
         sdkEntities.push({
-          type: 'Feature', geometry: { type: 'Point', coordinates: [eq.lng, eq.lat] },
-          properties: { domain: 'LAND', name: `M${eq.magnitude} ${eq.place || ''}`, source: 'USGS' },
+          type: 'Feature', geometry: { type: 'Point', coordinates: [lng, lat] },
+          properties: { domain: 'LAND', name: `M${eq.properties?.magnitude} ${eq.properties?.place || ''}`, source: 'USGS' },
         });
       }
     }

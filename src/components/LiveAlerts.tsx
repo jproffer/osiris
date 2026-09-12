@@ -80,9 +80,9 @@ export default function LiveAlerts({ data, onLocate, onWatchFeed }: LiveAlertsPr
   if (data.earthquakes) {
     data.earthquakes.slice(0, 5).forEach((eq: any) => {
       alerts.push({
-        type: 'quake', title: `M${eq.magnitude} - ${eq.place}`, source: 'USGS',
-        lat: eq.lat, lng: eq.lng, time: eq.time,
-        severity: eq.magnitude >= 6 ? 'CRITICAL' : eq.magnitude >= 4.5 ? 'HIGH' : 'MODERATE',
+        type: 'quake', title: `M${eq.properties?.magnitude} - ${eq.properties?.place}`, source: 'USGS',
+        lat: eq.geometry?.coordinates?.[1], lng: eq.geometry?.coordinates?.[0], time: eq.properties?.time,
+        severity: eq.properties?.magnitude >= 6 ? 'CRITICAL' : eq.properties?.magnitude >= 4.5 ? 'HIGH' : 'MODERATE',
       });
     });
   }
