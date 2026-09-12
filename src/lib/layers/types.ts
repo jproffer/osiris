@@ -130,8 +130,13 @@ export interface GeoFeature {
   properties: Record<string, unknown>;
 }
 
+/** Namespaces every engine-owned id, so nothing can collide with a hand-written source. */
+export const ID_PREFIX = 'lyr:';
+
 export function sourceId(layerId: string, datasetKey: string): string {
-  return datasetKey === 'default' ? layerId : `${layerId}--${datasetKey}`;
+  return datasetKey === 'default'
+    ? `${ID_PREFIX}${layerId}`
+    : `${ID_PREFIX}${layerId}--${datasetKey}`;
 }
 
 export function mapLayerId(layerId: string, datasetKey: string, suffix: string): string {

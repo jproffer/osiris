@@ -54,35 +54,35 @@ describe('LayerEngine.mount', () => {
   it('adds one source per dataset and one layer per spec', () => {
     const map = new FakeMap();
     engineOf(map).mount([manifest()]);
-    expect([...map.sources.keys()]).toEqual(['radiation']);
-    expect([...map.layers.keys()]).toEqual(['radiation--glow', 'radiation--dots']);
+    expect([...map.sources.keys()]).toEqual(['lyr:radiation']);
+    expect([...map.layers.keys()]).toEqual(['lyr:radiation--glow', 'lyr:radiation--dots']);
   });
 
   it('names sources and layers per the id rules for a non-default dataset', () => {
     const map = new FakeMap();
     const m = manifest({ id: 'maritime', datasets: [{ ...manifest().datasets[0], key: 'ships' }] });
     engineOf(map).mount([m]);
-    expect([...map.sources.keys()]).toEqual(['maritime--ships']);
-    expect([...map.layers.keys()]).toEqual(['maritime--ships--glow', 'maritime--ships--dots']);
+    expect([...map.sources.keys()]).toEqual(['lyr:maritime--ships']);
+    expect([...map.layers.keys()]).toEqual(['lyr:maritime--ships--glow', 'lyr:maritime--ships--dots']);
   });
 
   it('mounts every layer hidden', () => {
     const map = new FakeMap();
     engineOf(map).mount([manifest()]);
-    expect(map.visibilityOf('radiation--dots')).toBe('none');
-    expect(map.visibilityOf('radiation--glow')).toBe('none');
+    expect(map.visibilityOf('lyr:radiation--dots')).toBe('none');
+    expect(map.visibilityOf('lyr:radiation--glow')).toBe('none');
   });
 
   it('resolves palette tokens in paint', () => {
     const map = new FakeMap();
     engineOf(map).mount([manifest()]);
-    expect((map.layers.get('radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#00E5FF');
+    expect((map.layers.get('lyr:radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#00E5FF');
   });
 
   it('leaves non-token paint values alone', () => {
     const map = new FakeMap();
     engineOf(map).mount([manifest()]);
-    expect((map.layers.get('radiation--glow')!.paint as Record<string, unknown>)['circle-color']).toBe('#7E57C2');
+    expect((map.layers.get('lyr:radiation--glow')!.paint as Record<string, unknown>)['circle-color']).toBe('#7E57C2');
   });
 
   it('does not mount custom or overlay render kinds as MapLibre layers', () => {
@@ -109,9 +109,9 @@ describe('LayerEngine.setActive', () => {
     const engine = engineOf(map);
     engine.mount([manifest()]);
     engine.setActive(new Set(['radiation']));
-    expect(map.visibilityOf('radiation--dots')).toBe('visible');
+    expect(map.visibilityOf('lyr:radiation--dots')).toBe('visible');
     engine.setActive(new Set());
-    expect(map.visibilityOf('radiation--dots')).toBe('none');
+    expect(map.visibilityOf('lyr:radiation--dots')).toBe('none');
   });
 
   it('shows a layer when any of its variants is active', () => {
@@ -119,7 +119,7 @@ describe('LayerEngine.setActive', () => {
     const engine = engineOf(map);
     engine.mount([manifest({ id: 'satellites', variants: [{ id: 'sat_comms', label: 'Comms', filter: { property: 'category', equals: 'comms' } }] })]);
     engine.setActive(new Set(['sat_comms']));
-    expect(map.visibilityOf('satellites--dots')).toBe('visible');
+    expect(map.visibilityOf('lyr:satellites--dots')).toBe('visible');
   });
 
   it('deactivates one dataset of a multi-dataset manifest while its sibling stays active', () => {
@@ -129,17 +129,17 @@ describe('LayerEngine.setActive', () => {
     engine.setActive(new Set(['commercial', 'military']));
     engine.setData('flights', 'commercial', [feature({ n: 1 })]);
     engine.setData('flights', 'military', [feature({ n: 2 })]);
-    expect(map.featuresIn('flights--commercial')).toHaveLength(1);
-    expect(map.featuresIn('flights--military')).toHaveLength(1);
+    expect(map.featuresIn('lyr:flights--commercial')).toHaveLength(1);
+    expect(map.featuresIn('lyr:flights--military')).toHaveLength(1);
 
     // Turn "military" off, leaving "commercial" on.
     engine.setActive(new Set(['commercial']));
 
-    expect(map.visibilityOf('flights--military--dots')).toBe('none');
-    expect(map.featuresIn('flights--military')).toHaveLength(0);
+    expect(map.visibilityOf('lyr:flights--military--dots')).toBe('none');
+    expect(map.featuresIn('lyr:flights--military')).toHaveLength(0);
     // The sibling dataset must be untouched by deactivating the other.
-    expect(map.visibilityOf('flights--commercial--dots')).toBe('visible');
-    expect(map.featuresIn('flights--commercial')).toHaveLength(1);
+    expect(map.visibilityOf('lyr:flights--commercial--dots')).toBe('visible');
+    expect(map.featuresIn('lyr:flights--commercial')).toHaveLength(1);
   });
 });
 
@@ -150,7 +150,7 @@ describe('LayerEngine.setData', () => {
     engine.mount([manifest()]);
     engine.setActive(new Set(['radiation']));
     engine.setData('radiation', 'default', [feature({ n: 1 })]);
-    expect(map.featuresIn('radiation')).toHaveLength(1);
+    expect(map.featuresIn('lyr:radiation')).toHaveLength(1);
   });
 
   it('filters to the union of active variant filters', () => {
@@ -167,10 +167,10 @@ describe('LayerEngine.setData', () => {
 
     engine.setActive(new Set(['sat_comms']));
     engine.setData('satellites', 'default', rows);
-    expect(map.featuresIn('satellites')).toHaveLength(1);
+    expect(map.featuresIn('lyr:satellites')).toHaveLength(1);
 
     engine.setActive(new Set(['sat_comms', 'sat_military']));
-    expect(map.featuresIn('satellites')).toHaveLength(2);
+    expect(map.featuresIn('lyr:satellites')).toHaveLength(2);
   });
 
   it('shows every feature when the manifest id itself is active', () => {
@@ -179,7 +179,7 @@ describe('LayerEngine.setData', () => {
     engine.mount([manifest({ id: 'satellites', variants: [{ id: 'sat_comms', label: 'C', filter: { property: 'category', equals: 'comms' } }] })]);
     engine.setData('satellites', 'default', [feature({ category: 'comms' }), feature({ category: 'science' })]);
     engine.setActive(new Set(['satellites']));
-    expect(map.featuresIn('satellites')).toHaveLength(2);
+    expect(map.featuresIn('lyr:satellites')).toHaveLength(2);
   });
 
   it('clears the source when the layer goes inactive', () => {
@@ -189,7 +189,7 @@ describe('LayerEngine.setData', () => {
     engine.setActive(new Set(['radiation']));
     engine.setData('radiation', 'default', [feature({ n: 1 })]);
     engine.setActive(new Set());
-    expect(map.featuresIn('radiation')).toHaveLength(0);
+    expect(map.featuresIn('lyr:radiation')).toHaveLength(0);
   });
 });
 
@@ -198,7 +198,7 @@ describe('LayerEngine.clickableLayerIds', () => {
     const map = new FakeMap();
     const engine = engineOf(map);
     engine.mount([manifest()]);
-    expect(engine.clickableLayerIds()).toEqual(['radiation--dots']);
+    expect(engine.clickableLayerIds()).toEqual(['lyr:radiation--dots']);
   });
 });
 
@@ -208,7 +208,7 @@ describe('LayerEngine.setPalette', () => {
     const engine = engineOf(map);
     engine.mount([manifest()]);
     engine.setPalette({ cctv: '#FF0000' });
-    expect((map.layers.get('radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#FF0000');
+    expect((map.layers.get('lyr:radiation--dots')!.paint as Record<string, unknown>)['circle-color']).toBe('#FF0000');
   });
 });
 
@@ -238,7 +238,7 @@ describe('LayerEngine interaction', () => {
     engine.setActive(new Set(['radiation']));
     engine.attach();
 
-    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima', value: '15' } }];
+    map.hits = [{ layer: { id: 'lyr:radiation--dots' }, properties: { place: 'Fukushima', value: '15' } }];
     map.emit('click', clickEvent);
 
     expect(seen).toHaveLength(1);
@@ -268,7 +268,7 @@ describe('LayerEngine interaction', () => {
     engine.setActive(new Set(['radiation']));
     engine.attach();
 
-    map.hits = [{ layer: { id: 'radiation--glow' }, properties: {} }];
+    map.hits = [{ layer: { id: 'lyr:radiation--glow' }, properties: {} }];
     map.emit('click', clickEvent);
     expect(seen).toEqual([]);
   });
@@ -281,8 +281,8 @@ describe('LayerEngine interaction', () => {
     engine.attach();
 
     map.hits = [
-      { layer: { id: 'piracy--dots' }, properties: { place: 'Gulf of Guinea' } },
-      { layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } },
+      { layer: { id: 'lyr:piracy--dots' }, properties: { place: 'Gulf of Guinea' } },
+      { layer: { id: 'lyr:radiation--dots' }, properties: { place: 'Fukushima' } },
     ];
     map.emit('click', clickEvent);
     expect(seen[0].layerId).toBe('piracy');
@@ -295,7 +295,7 @@ describe('LayerEngine interaction', () => {
     engine.setActive(new Set(['cctv']));
     engine.attach();
 
-    map.hits = [{ layer: { id: 'cctv--dots' }, properties: { id: 'cam-1' } }];
+    map.hits = [{ layer: { id: 'lyr:cctv--dots' }, properties: { id: 'cam-1' } }];
     map.emit('click', clickEvent);
     expect(seen[0].kind).toBe('panel');
     if (seen[0].kind !== 'panel') return;
@@ -310,7 +310,7 @@ describe('LayerEngine interaction', () => {
     engine.setActive(new Set(['flights']));
     engine.attach();
 
-    map.hits = [{ layer: { id: 'flights--dots' }, properties: { callsign: 'BA117' } }];
+    map.hits = [{ layer: { id: 'lyr:flights--dots' }, properties: { callsign: 'BA117' } }];
     map.emit('click', clickEvent);
     expect(seen[0].kind).toBe('adapter');
     if (seen[0].kind !== 'adapter') return;
@@ -326,7 +326,7 @@ describe('LayerEngine interaction', () => {
     engine.attach();
 
     // An ordinary layer wins.
-    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } }];
+    map.hits = [{ layer: { id: 'lyr:radiation--dots' }, properties: { place: 'Fukushima' } }];
     map.emit('click', clickEvent);
     expect(seen[0].layerId).toBe('radiation');
 
@@ -357,7 +357,7 @@ describe('LayerEngine interaction', () => {
     engine.setActive(new Set(['radiation']));
     engine.attach();
 
-    map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
+    map.hits = [{ layer: { id: 'lyr:radiation--dots' }, properties: {} }];
     map.emit('mousemove', clickEvent);
     expect(map.canvas.style.cursor).toBe('pointer');
 
@@ -374,7 +374,7 @@ describe('LayerEngine interaction', () => {
     engine.attach();
 
     map.canvas.style.cursor = 'crosshair';
-    map.hits = [{ layer: { id: 'radiation--dots' }, properties: {} }];
+    map.hits = [{ layer: { id: 'lyr:radiation--dots' }, properties: {} }];
     map.emit('mousemove', clickEvent);
     expect(map.canvas.style.cursor).toBe('crosshair');
   });
@@ -389,7 +389,7 @@ describe('LayerEngine interaction', () => {
     engine.mount([popupManifest()]);
     engine.setActive(new Set(['radiation']));
 
-    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'Fukushima' } }];
+    map.hits = [{ layer: { id: 'lyr:radiation--dots' }, properties: { place: 'Fukushima' } }];
     map.emit('click', clickEvent);
 
     expect(seen).toHaveLength(1);
@@ -404,7 +404,7 @@ describe('LayerEngine interaction', () => {
     engine.attach();
     engine.detach();
 
-    map.hits = [{ layer: { id: 'radiation--dots' }, properties: { place: 'X' } }];
+    map.hits = [{ layer: { id: 'lyr:radiation--dots' }, properties: { place: 'X' } }];
     map.emit('click', clickEvent);
     expect(seen).toEqual([]);
   });
