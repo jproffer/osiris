@@ -11,6 +11,9 @@ import SatelliteCard, { type SatelliteDetail } from '@/components/SatelliteCard'
 import CctvPreviews, { type PreviewCamera } from '@/components/CctvPreviews';
 import MapControls from '@/components/MapControls';
 import LiveNewsPreviews, { type PreviewFeed } from '@/components/LiveNewsPreviews';
+import { LayerEngine, type Selection } from '@/lib/layers/engine';
+import type { ClientManifest } from '@/lib/layers/client-manifest';
+import type { MapLike } from '@/lib/layers/maplike';
 
 /** The catalogue fields the satellite layer and its popup actually read. */
 interface SatelliteRow {
@@ -28,6 +31,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 interface OsirisMapProps {
   data: any;
   activeLayers: Record<string, boolean>;
+  manifests?: ClientManifest[];
   onEntityClick?: (entity: any) => void;
   onMouseCoords?: (coords: { lat: number; lng: number }) => void;
   onRightClick?: (coords: { lat: number; lng: number }) => void;
@@ -96,7 +100,7 @@ function computeSolarTerminator(): [number, number][] {
 
 const EMPTY_FC = { type: 'FeatureCollection' as const, features: [] };
 
-function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {} }: OsirisMapProps) {
+function OsirisMap({ data, activeLayers, manifests = [], onEntityClick, onMouseCoords, onRightClick, onViewStateChange, flyToLocation, projection = 'globe', mapStyle = 'dark', sweepData, scanTargets = [], demoMode = false, theme = 'core', drawnPolygons = [], arcgisLayers = [], drawMode = null, onDrawComplete, onDrawProgress, onDrawCancel, drawCommand = null, onMapCenter, route = null, userLocation = null, followUser = false, onFollowInterrupt, navigating = false, aircraftAirports = {} }: OsirisMapProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<maplibregl.Map | null>(null);
   const popupRef = useRef<maplibregl.Popup | null>(null);
@@ -818,6 +822,11 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'text-offset': [0, 1.2], 'text-allow-overlap': false,
       }, paint: { 'text-color': ['match', ['get','type'], 'military','#D32F2F', 'tanker','#E65100', 'cargo','#26C6DA', '#B0BEC5'], 'text-halo-color': '#000', 'text-halo-width': 1 }});
 
+      /* Manifest layers insert before this, so the bespoke overlays OsirisMap
+         keeps -- routes, drawing, user location, watched airports, sweep --
+         stay on top exactly as they sit above the hand-written layers today. */
+      map.addSource('lyr:sentinel', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      map.addLayer({ id: 'lyr:overlay-floor', type: 'symbol', source: 'lyr:sentinel', layout: {} });
 
       setMapReady(true);
       // Dev-only handle. The map is otherwise unreachable from the console,
@@ -1025,7 +1034,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       // land and water fills at essentially any point on the globe, which
       // made this bail out every single time.
       const hits = map.queryRenderedFeatures(e.point);
-      if (hits.some(f => f.layer?.id && CLICKABLE_LAYERS.has(f.layer.id))) return;
+      /* The engine derives its own clickable set. Until satellites migrates in
+         batch 7 the pick must defer to both, or every layer that migrates
+         would start losing its clicks to a satellite behind it -- the exact
+         bug this project was started to fix. */
+      const engineClickable = engineRef.current?.clickableLayerIds() ?? [];
+      const clickable = new Set([...CLICKABLE_LAYERS, ...engineClickable]);
+      if (hits.some(f => f.layer?.id && clickable.has(f.layer.id))) return;
       const idx = layer.pick(e.point.x, e.point.y);
       const p = idx == null ? null : satRowsRef.current[idx];
       // Clicking past every satellite is how a selection is dismissed, so an
@@ -1615,6 +1630,60 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     return () => { map.remove(); mapRef.current = null; };
   }, []);
 
+  const engineRef = useRef<LayerEngine | null>(null);
+
+  useEffect(() => {
+    if (!mapReady || !mapRef.current) return;
+    const map = mapRef.current;
+
+    const engine = new LayerEngine(map as unknown as MapLike, {
+      palette: paletteRef.current as unknown as Record<string, string>,
+      beforeId: 'lyr:overlay-floor',
+      onSelect: (sel: Selection) => {
+        if (sel.kind === 'popup') {
+          popupRef.current?.remove();
+          popupRef.current = new maplibregl.Popup({ closeButton: true, maxWidth: '420px', offset: 14 })
+            .setLngLat(sel.lngLat).setHTML(sel.html).addTo(map);
+        } else if (sel.kind === 'panel') {
+          onEntityClick?.({ type: sel.panel, ...sel.properties, lng: sel.lngLat[0], lat: sel.lngLat[1] });
+        }
+        // 'adapter' selections arrive with flights and satellites, batches 6-7.
+      },
+    });
+    engine.mount(manifests);
+    engine.attach();
+    engineRef.current = engine;
+
+    /* A style reload discards every source and layer, so remount and re-push. */
+    const remount = () => { engine.mount(manifests); };
+    map.on('styledata', remount);
+
+    return () => {
+      map.off('styledata', remount);
+      engine.destroy();
+      engineRef.current = null;
+    };
+  }, [mapReady, manifests, onEntityClick]);
+
+  // Push data into the engine whenever it changes.
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    for (const m of manifests) {
+      for (const d of m.datasets) {
+        const rows = data[`${m.id}.${d.key}`];
+        if (Array.isArray(rows)) engine.setData(m.id, d.key, rows);
+      }
+    }
+  }, [data, manifests]);
+
+  // Push activation.
+  useEffect(() => {
+    engineRef.current?.setActive(
+      new Set(Object.entries(activeLayers).filter(([, on]) => on).map(([k]) => k)),
+    );
+  }, [activeLayers, manifests]);
+
   // Day/Night
   useEffect(() => {
     if (!mapReady || !mapRef.current) return;
@@ -1783,6 +1852,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       updateMapIcon('plane-pink', palette.flightGov, 24);
       updateMapIcon('plane-red', palette.flightMilitary, 24);
       updateMapIcon('plane-grey', palette.flightUnknown, 24);
+      engineRef.current?.setPalette(palette as unknown as Record<string, string>);
     }, [mapReady, palette]);
 
     /* Cameras are circles and a label, so no image to rebuild — the colour is

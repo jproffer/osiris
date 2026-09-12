@@ -37,6 +37,9 @@ import { toShape, queryRing, type DrawMode, type DrawnShape, type DrawProgress, 
 import { selectInPolygon } from '@/lib/aoi';
 import { diffSweep, appendEvents, type WatchBaseline, type WatchEvent } from '@/lib/watch';
 import { STORAGE_KEY, serializeShapes, deserializeShapes, shapesToGeoJSON, downloadFile } from '@/lib/aoi-export';
+import type { ClientManifest } from '@/lib/layers/client-manifest';
+import type { ConfigStatus } from '@/lib/layers/panel-rows';
+import { useLayerData } from '@/hooks/useLayerData';
 const TokenPanel = dynamic(() => import('@/components/TokenPanel'));
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(false);
@@ -422,6 +425,50 @@ export default function Dashboard() {
 
     return () => clearTimeout(geoTimer);
   }, []);
+
+  const [manifests, setManifests] = useState<ClientManifest[]>([]);
+  const [configStatus, setConfigStatus] = useState<ConfigStatus>({});
+
+  useEffect(() => {
+    fetch('/api/layers')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => {
+        if (!d?.manifests) return;
+        setManifests(d.manifests);
+        /* Seed defaults from the manifests, then let the ?layers= restore below
+           apply over the top. Manifest ids are exactly today's activeLayers
+           keys, so existing share links keep resolving. */
+        setActiveLayers((prev: any) => {
+          const next = { ...prev };
+          for (const m of d.manifests as ClientManifest[]) {
+            if (!(m.id in next)) next[m.id] = m.defaultOn;
+            for (const v of m.variants) if (!(v.id in next)) next[v.id] = !!v.defaultOn;
+          }
+          return next;
+        });
+      })
+      .catch(() => { /* panel falls back to LAYER_GROUPS rows */ });
+
+    fetch('/api/layer-config')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (d?.layers) setConfigStatus(d.layers); })
+      .catch(() => { /* rows render without credential annotation */ });
+  }, []);
+
+  const activeSet = useMemo(
+    () => new Set(Object.entries(activeLayers).filter(([, on]) => on).map(([k]) => k)),
+    [activeLayers],
+  );
+
+  useLayerData({
+    manifests,
+    active: activeSet,
+    viewport: null, // viewport mode arrives with CCTV in batch 5
+    write: useCallback((patch: Record<string, unknown>) => {
+      dataRef.current = { ...dataRef.current, ...patch };
+      setDataVersion(v => v + 1);
+    }, []),
+  });
 
   // URL state: persist active layers only (lat/lon comes from IP geolocation on each load)
   const urlTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1238,11 +1285,12 @@ export default function Dashboard() {
 
       {/* ── MAP ── */}
       <ErrorBoundary name="Map">
-        <OsirisMap 
+        <OsirisMap
           key={osirisTheme}
-          data={data} 
-          activeLayers={activeLayers} 
-          projection={mapProjection} 
+          data={data}
+          activeLayers={activeLayers}
+          manifests={manifests}
+          projection={mapProjection}
           mapStyle={mapStyle === 'satellite' ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}' : 'dark'} 
           onEntityClick={handleEntityClick} 
           onMouseCoords={handleMouseCoords} 
@@ -1455,7 +1503,7 @@ export default function Dashboard() {
 
 
       {/* ── NEW SIDEBAR (Root Level) ── */}
-      {showLayers && !isMobile && <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} />}
+      {showLayers && !isMobile && <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} manifests={manifests} configStatus={configStatus} />}
 
 
 
@@ -1833,7 +1881,7 @@ export default function Dashboard() {
                           <div><div className="hud-label" style={{fontSize:'9px'}}>NUC</div><div className="hud-value text-[10px]" style={{color:'var(--accent-nuclear)'}}>{(data.infrastructure?.length||0)}</div></div>
                         </div>
                       </div>
-                      <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} />
+                      <LayerPanel data={data} activeLayers={activeLayers} setActiveLayers={setActiveLayers} isMobile={true} theme={osirisTheme} setTheme={setOsirisTheme} capabilities={capabilities} manifests={manifests} configStatus={configStatus} />
                       <div className="mt-8">
                         <ViewPresets onNavigate={(lat, lng, zoom) => { setFlyToLocation({ lat, lng, ts: Date.now() }); setMapView(v => ({ ...v, zoom })); setMobilePanel(null); }} />
                       </div>
