@@ -3,6 +3,17 @@ import { extractRows, rowsToFeatures } from './http-source';
 import { substitute } from './substitute';
 import type { Bbox, SourceAdapter } from './adapters';
 
+/**
+ * A manifest may point at this instance's own route -- /api/fires does the
+ * FIRMS parsing, /api/weather aggregates events -- but serveDatasets runs
+ * server-side and safeFetch needs an absolute URL.
+ */
+export function resolveSelfOrigin(url: string): string {
+  if (!url.startsWith('/')) return url;
+  const origin = (process.env.OSIRIS_SELF_ORIGIN ?? 'http://127.0.0.1:3000').replace(/\/$/, '');
+  return `${origin}${url}`;
+}
+
 export interface ServeDeps {
   /** Fetches an upstream URL. The route supplies safeFetch wrapped in cachedSource. */
   fetchText(url: string, headers: Record<string, string>, ttlMs: number): Promise<string>;
@@ -84,7 +95,7 @@ export async function serveDatasets(
       };
     }
 
-    const url = substitute(source.url, resolveKey, deps.now).text;
+    const url = resolveSelfOrigin(substitute(source.url, resolveKey, deps.now).text);
     const headers: Record<string, string> = {};
     for (const [name, template] of Object.entries(source.headers ?? {})) {
       headers[name] = substitute(template, resolveKey, deps.now).text;

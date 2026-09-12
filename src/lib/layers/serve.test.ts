@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { serveDatasets } from './serve';
+import { serveDatasets, resolveSelfOrigin } from './serve';
 import type { NormalisedManifest, SourceSpec } from './types';
 import type { ServeDeps } from './serve';
 
@@ -134,5 +134,38 @@ describe('serveDatasets', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.status).toBe(400);
+  });
+});
+
+describe('resolveSelfOrigin', () => {
+  it('leaves an absolute url alone', () => {
+    expect(resolveSelfOrigin('https://api.safecast.org/measurements.json'))
+      .toBe('https://api.safecast.org/measurements.json');
+  });
+
+  it('resolves a root-relative url against the instance origin', () => {
+    expect(resolveSelfOrigin('/api/fires')).toBe('http://127.0.0.1:3000/api/fires');
+  });
+
+  it('honours OSIRIS_SELF_ORIGIN', () => {
+    const prev = process.env.OSIRIS_SELF_ORIGIN;
+    process.env.OSIRIS_SELF_ORIGIN = 'http://osiris:3000';
+    try {
+      expect(resolveSelfOrigin('/api/weather')).toBe('http://osiris:3000/api/weather');
+    } finally {
+      if (prev === undefined) delete process.env.OSIRIS_SELF_ORIGIN;
+      else process.env.OSIRIS_SELF_ORIGIN = prev;
+    }
+  });
+
+  it('strips a trailing slash from the configured origin', () => {
+    const prev = process.env.OSIRIS_SELF_ORIGIN;
+    process.env.OSIRIS_SELF_ORIGIN = 'http://osiris:3000/';
+    try {
+      expect(resolveSelfOrigin('/api/fires')).toBe('http://osiris:3000/api/fires');
+    } finally {
+      if (prev === undefined) delete process.env.OSIRIS_SELF_ORIGIN;
+      else process.env.OSIRIS_SELF_ORIGIN = prev;
+    }
   });
 });
