@@ -84,3 +84,32 @@ describe('fires popup parity', () => {
     expect(html).toMatchSnapshot();
   });
 });
+
+describe('weather popup parity', () => {
+  const html = render('30-weather.json', 'weather');
+  const fixture = loadFixture('weather');
+
+  it('shows every label the old popup showed', () => {
+    for (const label of ['SEVERITY', 'COORDS']) expect(html).toContain(label);
+  });
+
+  it('shows the event type as the heading and the title as the body', () => {
+    expect(html).toContain(String(fixture.properties.type));
+    expect(html).toContain(String(fixture.properties.title));
+  });
+
+  it('shows the severity uppercased', () => {
+    expect(html).toContain(String(fixture.properties.severity ?? 'low').toUpperCase());
+  });
+
+  it('picks the glyph from the icon', () => {
+    const expected: Record<string, string> = {
+      cyclone: '🌀', volcano: '🌋', flood: '🌊', drought: '🏜️', ice: '🧊', weather: '⚠️',
+    };
+    expect(html).toContain(expected[String(fixture.properties.icon)] ?? '⚡');
+  });
+
+  it('matches its recorded shape', () => {
+    expect(html).toMatchSnapshot();
+  });
+});

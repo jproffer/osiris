@@ -1,0 +1,92 @@
+{
+  "id": "weather",
+  "label": "Severe Weather",
+  "group": "HAZARD",
+  "order": 30,
+  "datasets": [
+    {
+      "key": "default",
+      "legacyKey": "weather_events",
+      "source": {
+        "kind": "http",
+        "url": "/api/weather",
+        "format": "json",
+        "arrayPath": "events",
+        "lat": "lat",
+        "lng": "lng",
+        "properties": {
+          "id": "id", "title": "title", "type": "type",
+          "icon": "icon", "severity": "severity", "source": "source"
+        },
+        "cacheTtlMs": 900000,
+        "refresh": { "mode": "once" }
+      },
+      "layers": [
+        {
+          "suffix": "glow",
+          "type": "circle",
+          "paint": {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 12, 5, 20, 10, 30],
+            "circle-color": "#7E57C2", "circle-opacity": 0.08, "circle-blur": 1
+          }
+        },
+        {
+          "suffix": "dots",
+          "type": "circle",
+          "clickable": true,
+          "paint": {
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 1, 5, 5, 8, 10, 14],
+            "circle-color": ["match", ["get", "icon"], "cyclone", "#7E57C2", "volcano", "#D32F2F", "#7E57C2"],
+            "circle-opacity": 0.75,
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": "#7E57C2",
+            "circle-stroke-opacity": 0.35
+          }
+        },
+        {
+          "suffix": "label",
+          "type": "symbol",
+          "layout": {
+            "text-field": ["get", "title"], "text-size": 9,
+            "text-font": ["Open Sans Regular"], "text-offset": [0, 2],
+            "text-max-width": 14, "text-allow-overlap": false
+          },
+          "paint": {
+            "text-color": "#7E57C2", "text-halo-color": "#000",
+            "text-halo-width": 1, "text-opacity": 0.8
+          }
+        }
+      ]
+    }
+  ],
+  "interaction": {
+    "kind": "popup",
+    "popup": {
+      "accent": "#E040FB",
+      "glyph": {
+        "match": {
+          "property": "icon",
+          "cases": {
+            "cyclone": "🌀", "volcano": "🌋", "flood": "🌊",
+            "drought": "🏜️", "ice": "🧊", "weather": "⚠️"
+          },
+          "fallback": "⚡"
+        }
+      },
+      "title": { "property": "type" },
+      "body": { "value": { "property": "title" } },
+      "fields": [
+        {
+          "label": "SEVERITY",
+          "value": { "match": { "property": "severity", "cases": { "low": "low", "medium": "medium", "high": "high" }, "fallback": "low" } },
+          "format": "upper",
+          "color": { "match": { "property": "severity", "cases": { "high": "#FF1744" }, "fallback": "#FFD700" } }
+        },
+        { "label": "COORDS", "value": { "template": "{$lat3}°, {$lng3}°" } }
+      ],
+      "links": [
+        { "label": "📡 SOURCE", "url": "{source}", "when": { "property": "source", "exists": true } }
+      ]
+    }
+  }
+}

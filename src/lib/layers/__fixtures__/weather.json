@@ -1,0 +1,14 @@
+{
+  "properties": {
+    "id": "eonet-EONET_24184",
+    "title": "Tropical Storm Norbert",
+    "type": "Severe Storm",
+    "icon": "cyclone",
+    "severity": "high",
+    "source": "https://www.metoc.navy.mil/jtwc/products/ep1426.tcw"
+  },
+  "lngLat": [
+    -127,
+    17
+  ]
+}
